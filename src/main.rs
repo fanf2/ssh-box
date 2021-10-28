@@ -1,6 +1,8 @@
 use anyhow::Result;
 use getopts::Options;
 
+mod sshkey;
+
 fn usage(progname: &str, opts: Options, status: i32) {
     let brief = format!("usage: {} {{-c|-d|-e|-l}} [options]", progname);
     print!("{}", opts.usage(&brief));
@@ -41,8 +43,10 @@ fn main() -> Result<()> {
     } else if matches.opt_present("l") {
         println!("listing recipients");
     } else {
-        usage(progname, opts, 1);
+        // usage(progname, opts, 1);
     }
+
+    print!("{:#?}", sshkey::read_secret_key("id_ed25519")?);
 
     Ok(())
 }
