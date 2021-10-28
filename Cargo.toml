@@ -1,0 +1,12 @@
+[package]
+name = "ssh-box"
+version = "0.0.0"
+authors = ["Tony Finch <dot@dotat.at>"]
+edition = "2021"
+
+[dependencies]
+aes = "~0"
+anyhow = "~1"
+base64 = "~0"
+getopts = "~0"
+nom = "~6"
