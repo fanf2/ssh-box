@@ -68,18 +68,40 @@ impl std::fmt::Display for PublicKey {
     }
 }
 
-type NomErr<'a> = nom::Err<nom::error::VerboseError<&'a [u8]>>;
-
-fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
+fn bcrypt_aes_decrypt(
+    secrets: &mut [u8],
+    password: &str,
+    salt: &[u8],
+    rounds: u32,
+) -> Result<()> {
     use aes::cipher::generic_array::GenericArray;
     use aes::cipher::NewCipher;
     use aes::cipher::StreamCipher;
+
+    const KEY_LEN: usize = 32;
+    const IV_LEN: usize = 16;
+
+    let mut aes_key_iv = [0u8; KEY_LEN + IV_LEN];
+    bcrypt_pbkdf::bcrypt_pbkdf(password, salt, rounds, &mut aes_key_iv)?;
+
+    let aes_key = GenericArray::from_slice(&aes_key_iv[0..KEY_LEN]);
+    let aes_iv = GenericArray::from_slice(&aes_key_iv[KEY_LEN..]);
+
+    let mut cipher = aes::Aes256Ctr::new(aes_key, aes_iv);
+    cipher.apply_keystream(secrets);
+
+    Ok(())
+}
+
+pub fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
     use nom::branch::*;
     use nom::bytes::complete::*;
     use nom::combinator::*;
     use nom::multi::*;
     use nom::number::complete::*;
     use nom::sequence::*;
+
+    type NomErr<'a> = nom::Err<nom::error::Error<&'a [u8]>>;
 
     let mut unarmor = delimited(
         tag(PREFIX),
@@ -117,7 +139,7 @@ fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
         ),
     );
 
-    let (_, (params, pubkey1, encrypted, _eof)) = tuple((
+    let (_, (cipher_params, pubkey1, encrypted, _eof)) = tuple((
         alt((parse_bcrypt_params, parse_none_params)),
         parse_pubkey,
         ssh_string(),
@@ -127,18 +149,14 @@ fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
 
     let mut secrets = encrypted.to_owned();
 
-    if let Some((salt, rounds)) = params {
-        const KEY_LEN: usize = 32;
-        const IV_LEN: usize = 16;
-
-        let mut aes_key_iv = [0u8; KEY_LEN + IV_LEN];
-        bcrypt_pbkdf::bcrypt_pbkdf("testing", salt, rounds, &mut aes_key_iv)?;
-
-        let aes_key = GenericArray::from_slice(&aes_key_iv[0..KEY_LEN]);
-        let aes_iv = GenericArray::from_slice(&aes_key_iv[KEY_LEN..]);
-
-        let mut cipher = aes::Aes256Ctr::new(aes_key, aes_iv);
-        cipher.apply_keystream(&mut secrets);
+    if let Some((salt, rounds)) = cipher_params {
+        if encrypted.len() % 16 != 0 {
+            return Err(anyhow!("bad alignment in private key"));
+        } else {
+            bcrypt_aes_decrypt(&mut secrets, "testing", salt, rounds)?;
+        }
+    } else if encrypted.len() % 8 != 0 {
+        return Err(anyhow!("bad alignment in private key"));
     }
 
     let parse_seckey =

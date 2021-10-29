@@ -46,7 +46,7 @@ fn main() -> Result<()> {
         // usage(progname, opts, 1);
     }
 
-    print!("{:#?}", sshkey::read_secret_key("id_ed25519.clear")?);
+    print!("{:#?}", sshkey::read_secret_key("id_ed25519")?);
 
     Ok(())
 }
