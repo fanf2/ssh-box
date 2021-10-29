@@ -9,12 +9,12 @@ const BASE64: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
                         ABCDEFGHIJKLMNOPQRSTUVWXYZ\
                         0123456789/+=";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PublicKey {
     Ed25519 { public: [u8; 32], comment: String },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SecretKey {
     Ed25519 { secret: [u8; 32], public: [u8; 32], comment: String },
 }
@@ -198,4 +198,51 @@ pub fn read_secret_key(key_file: &str, askpass: AskPass) -> Result<SecretKey> {
         .with_context(|| format!("failed to read {}", key_file))?;
     parse_secret_key(&ascii, askpass)
         .map_err(|err| anyhow!("could not parse {}: {}", key_file, err))
+}
+
+#[cfg(test)]
+mod test {
+
+    const SECRET_NONE: &[u8] = b"\
+    -----BEGIN OPENSSH PRIVATE KEY-----\n\
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+    QyNTUxOQAAACDCP67FyNO6h3/nvVM9Jn3lEb0+q3W+oNpplDSp0077tQAAAJB0TYerdE2H\n\
+    qwAAAAtzc2gtZWQyNTUxOQAAACDCP67FyNO6h3/nvVM9Jn3lEb0+q3W+oNpplDSp0077tQ\n\
+    AAAEBDwWHy+pCf/WKlyhwwHFymEl2/lxVF0PIPyIP7nzLK08I/rsXI07qHf+e9Uz0mfeUR\n\
+    vT6rdb6g2mmUNKnTTvu1AAAAB3Rlc3RpbmcBAgMEBQY=\n\
+    -----END OPENSSH PRIVATE KEY-----\n\
+    ";
+
+    const SECRET_BCRYPT: &[u8] = b"\
+    -----BEGIN OPENSSH PRIVATE KEY-----\n\
+    b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAFaUJX8M\n\
+    Pwuw/dD36vf2AcAAAAEAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIMI/rsXI07qHf+e9\n\
+    Uz0mfeURvT6rdb6g2mmUNKnTTvu1AAAAkOuSWLhj5JqnarRMioKy73Il5YWCsHO1BvDPpl\n\
+    tahgUYIbTHhzTuZrNwliprVzaDss/9DFESP36tZF26USuZhXyJGWaQ1MD14Nqokv6f+eB8\n\
+    +eTEVP57kHKZNXOerYL7t4DHJgMNJ+kjjpdMIyLadw2XP7SnIEG0P1m09/774JkcscIiKu\n\
+    78Hg/SQXI9ZaYuBg==\n\
+    -----END OPENSSH PRIVATE KEY-----\n\
+    ";
+
+    const PUBLIC: &str = "\
+    ssh-ed25519 \
+    AAAAC3NzaC1lZDI1NTE5AAAAIMI/rsXI07qHf+e9Uz0mfeURvT6rdb6g2mmUNKnTTvu1 \
+    testing\n\
+    ";
+
+    #[test]
+    fn test() {
+        use super::*;
+
+        let askpass = || Box::new(|| Ok("testing".to_owned()));
+
+        let sec_none = parse_secret_key(SECRET_NONE, askpass()).unwrap();
+        let sec_bcrypt = parse_secret_key(SECRET_BCRYPT, askpass()).unwrap();
+        assert_eq!(sec_none, sec_bcrypt);
+
+        let pub_none = format!("{}", PublicKey::from(sec_none));
+        let pub_bcrypt = format!("{}", PublicKey::from(sec_bcrypt));
+        assert_eq!(pub_none, PUBLIC);
+        assert_eq!(pub_bcrypt, PUBLIC);
+    }
 }
