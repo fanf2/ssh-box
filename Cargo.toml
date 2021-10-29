@@ -5,7 +5,7 @@ authors = ["Tony Finch <dot@dotat.at>"]
 edition = "2021"
 
 [dependencies]
-aes = "~0"
+aes = { version = "~0", features = ["ctr"] }
 anyhow = "~1"
 base64 = "~0"
 bcrypt-pbkdf = "~0"

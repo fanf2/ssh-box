@@ -60,25 +60,27 @@ fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
     let len_tag = |bytes: &'static [u8]| length_value(be_u32, tag(bytes));
     let be_u32_is = |wanted| verify(be_u32, move |&found| found == wanted);
 
-    let (rest, (salt, rounds, rawkey)) = map(
-        tuple((
-            tag(b"openssh-key-v1\0"),
-            len_tag(b"aes256-ctr"),
-            len_tag(b"bcrypt"),
-            map_parser(length_data(be_u32), pair(length_data(be_u32), be_u32)),
-            be_u32_is(1),
-            map_parser(
-                length_data(be_u32),
-                preceded(
-                    pair(len_tag(b"ssh-ed25519"), be_u32_is(32)),
-                    take(32usize),
-                ),
-            ),
-        )),
-        |(_magic, _cipher, _kdf, (salt, rounds), _keys, rawkey)| {
-            (salt, rounds, rawkey)
-        },
-    )(&binary[..])
+    let parse_bcrypt =
+        map_parser(length_data(be_u32), pair(length_data(be_u32), be_u32));
+
+    let parse_pubkey = map_parser(
+        length_data(be_u32),
+        preceded(len_tag(b"ssh-ed25519"), length_data(be_u32)),
+    );
+
+    let (
+        _rest,
+        (_magic, _cipher, _kdf, (salt, rounds), _keys, rawkey, encrypted, _eof),
+    ) = complete(tuple((
+        tag(b"openssh-key-v1\0"),
+        len_tag(b"aes256-ctr"),
+        len_tag(b"bcrypt"),
+        parse_bcrypt,
+        be_u32_is(1),
+        parse_pubkey,
+        length_data(be_u32),
+        eof,
+    )))(&binary[..])
     .map_err(|_: NomErr| anyhow!("could not parse private key"))?;
 
     let pubkey = PublicKey::ed25519_from_bytes(rawkey, "")?;
@@ -86,7 +88,24 @@ fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
     dbg!(salt);
     dbg!(rounds);
     print!("{}", pubkey);
-    dbg!(rest);
+
+    const KEY_LEN: usize = 32;
+    const IV_LEN: usize = 16;
+
+    let mut aes_key_iv = [0u8; KEY_LEN + IV_LEN];
+    bcrypt_pbkdf::bcrypt_pbkdf("testing", salt, rounds, &mut aes_key_iv)?;
+
+    use aes::cipher::generic_array::GenericArray;
+    use aes::cipher::NewCipher;
+    use aes::cipher::StreamCipher;
+
+    let aes_key = GenericArray::from_slice(&aes_key_iv[0..KEY_LEN]);
+    let aes_iv = GenericArray::from_slice(&aes_key_iv[KEY_LEN..]);
+
+    let mut cipher = aes::Aes256Ctr::new(aes_key, aes_iv);
+    let mut secrets = encrypted.to_owned();
+    cipher.apply_keystream(&mut secrets);
+    dbg!(secrets);
 
     /*
     ;; AUTH_MAGIC is a hard-coded, null-terminated string,
