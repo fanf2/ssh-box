@@ -7,33 +7,61 @@ const BASE64: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
                         ABCDEFGHIJKLMNOPQRSTUVWXYZ\
                         0123456789/+=";
 
-#[derive(Debug)]
-pub struct SecretKey(Vec<u8>);
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum PublicKey {
-    Ed25519([u8; 32], String),
+    Ed25519 { public: [u8; 32], comment: String },
+}
+
+#[derive(Clone, Debug)]
+pub enum SecretKey {
+    Ed25519 { secret: [u8; 32], public: [u8; 32], comment: String },
+}
+
+impl From<SecretKey> for PublicKey {
+    fn from(secret: SecretKey) -> PublicKey {
+        match secret {
+            SecretKey::Ed25519 { secret: _, public, comment } => {
+                PublicKey::Ed25519 { public, comment }
+            }
+        }
+    }
+}
+
+fn ed25519_from_bytes(key: &[u8]) -> Result<[u8; 32]> {
+    key.try_into().with_context(|| "ed25519 key must be 32 bytes")
 }
 
 impl PublicKey {
-    fn ed25519_from_bytes(bytes: &[u8], comment: &str) -> Result<PublicKey> {
-        let array: [u8; 32] = bytes
-            .try_into()
-            .with_context(|| "ed25519 public key must be 32 bytes")?;
-        Ok(PublicKey::Ed25519(array, comment.to_owned()))
+    fn ed25519_from_bytes(public: &[u8], comment: &[u8]) -> Result<PublicKey> {
+        let public = ed25519_from_bytes(public)?;
+        let comment = String::from_utf8(comment.to_owned())?;
+        Ok(PublicKey::Ed25519 { public, comment })
+    }
+}
+
+impl SecretKey {
+    fn ed25519_from_bytes(
+        secret: &[u8],
+        public: &[u8],
+        comment: &[u8],
+    ) -> Result<SecretKey> {
+        let secret = ed25519_from_bytes(secret)?;
+        let public = ed25519_from_bytes(public)?;
+        let comment = String::from_utf8(comment.to_owned())?;
+        Ok(SecretKey::Ed25519 { secret, public, comment })
     }
 }
 
 impl std::fmt::Display for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PublicKey::Ed25519(key, comment) => {
+            PublicKey::Ed25519 { public, comment } => {
                 let mut binary = Vec::new();
                 let algo = "ssh-ed25519";
                 binary.extend_from_slice(&u32::to_be_bytes(algo.len() as u32));
                 binary.extend_from_slice(algo.as_bytes());
                 binary.extend_from_slice(&u32::to_be_bytes(32));
-                binary.extend_from_slice(key);
+                binary.extend_from_slice(public);
                 writeln!(f, "{} {} {}", algo, base64::encode(binary), comment)
             }
         }
@@ -43,51 +71,53 @@ impl std::fmt::Display for PublicKey {
 type NomErr<'a> = nom::Err<nom::error::VerboseError<&'a [u8]>>;
 
 fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
+    use aes::cipher::generic_array::GenericArray;
+    use aes::cipher::NewCipher;
+    use aes::cipher::StreamCipher;
     use nom::bytes::complete::*;
     use nom::combinator::*;
     use nom::multi::*;
     use nom::number::complete::*;
     use nom::sequence::*;
-    let mut unarmor = complete(delimited(
+
+    let mut unarmor = delimited(
         tag(PREFIX),
         separated_list1(tag(b"\n"), is_a(BASE64)),
         tuple((tag(b"\n"), tag(SUFFIX), eof)),
-    ));
+    );
     let (_, base64_lines) = unarmor(ascii)
-        .map_err(|_: NomErr| anyhow!("could not extract private key base64"))?;
+        .map_err(|_: NomErr| anyhow!("could not find private key base64"))?;
+
     let binary = base64::decode(base64_lines.concat())?;
 
     let len_tag = |bytes: &'static [u8]| length_value(be_u32, tag(bytes));
     let be_u32_is = |wanted| verify(be_u32, move |&found| found == wanted);
+    let ssh_string = || length_data(be_u32);
 
-    let parse_bcrypt =
-        map_parser(length_data(be_u32), pair(length_data(be_u32), be_u32));
-
-    let parse_pubkey = map_parser(
-        length_data(be_u32),
-        preceded(len_tag(b"ssh-ed25519"), length_data(be_u32)),
-    );
-
-    let (
-        _rest,
-        (_magic, _cipher, _kdf, (salt, rounds), _keys, rawkey, encrypted, _eof),
-    ) = complete(tuple((
+    let parse_preamble = tuple((
         tag(b"openssh-key-v1\0"),
         len_tag(b"aes256-ctr"),
         len_tag(b"bcrypt"),
-        parse_bcrypt,
-        be_u32_is(1),
-        parse_pubkey,
-        length_data(be_u32),
-        eof,
-    )))(&binary[..])
-    .map_err(|_: NomErr| anyhow!("could not parse private key"))?;
+    ));
 
-    let pubkey = PublicKey::ed25519_from_bytes(rawkey, "")?;
+    let parse_bcrypt_params =
+        map_parser(ssh_string(), pair(ssh_string(), be_u32));
 
-    dbg!(salt);
-    dbg!(rounds);
-    print!("{}", pubkey);
+    let parse_pubkey = map_parser(
+        ssh_string(),
+        preceded(len_tag(b"ssh-ed25519"), ssh_string()),
+    );
+
+    let (_, (_preamble, (salt, rounds), _keycount, pubkey1, encrypted, _eof)) =
+        tuple((
+            parse_preamble,
+            parse_bcrypt_params,
+            be_u32_is(1),
+            parse_pubkey,
+            ssh_string(),
+            eof,
+        ))(&binary[..])
+        .map_err(|_: NomErr| anyhow!("could not parse private key"))?;
 
     const KEY_LEN: usize = 32;
     const IV_LEN: usize = 16;
@@ -95,84 +125,44 @@ fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
     let mut aes_key_iv = [0u8; KEY_LEN + IV_LEN];
     bcrypt_pbkdf::bcrypt_pbkdf("testing", salt, rounds, &mut aes_key_iv)?;
 
-    use aes::cipher::generic_array::GenericArray;
-    use aes::cipher::NewCipher;
-    use aes::cipher::StreamCipher;
-
     let aes_key = GenericArray::from_slice(&aes_key_iv[0..KEY_LEN]);
     let aes_iv = GenericArray::from_slice(&aes_key_iv[KEY_LEN..]);
 
     let mut cipher = aes::Aes256Ctr::new(aes_key, aes_iv);
     let mut secrets = encrypted.to_owned();
     cipher.apply_keystream(&mut secrets);
-    dbg!(secrets);
 
-    /*
-    ;; AUTH_MAGIC is a hard-coded, null-terminated string,
-    ;; set to "openssh-key-v1".
-    byte[n] AUTH_MAGIC
+    let parse_seckey =
+        map_parser(ssh_string(), pair(take(32usize), take(32usize)));
 
-    ;; ciphername determines the cipher name (if any),
-    ;; or is set to "none", when no encryption is used.
-    string   ciphername
+    let (pad, (check1, check2, _type, pubkey2, (seckey, pubkey3), comment)) =
+        tuple((
+            be_u32,
+            be_u32,
+            len_tag(b"ssh-ed25519"),
+            ssh_string(),
+            parse_seckey,
+            ssh_string(),
+        ))(&secrets[..])
+        .map_err(|_: NomErr| anyhow!("could not parse encrypted key"))?;
 
-    ;; kdfname determines the KDF function name, which is
-    ;; either "bcrypt" or "none"
-    string   kdfname
+    if check1 != check2 {
+        return Err(anyhow!("could not decrypt private key"));
+    }
+    if pubkey1 != pubkey2 || pubkey2 != pubkey3 {
+        return Err(anyhow!("inconsistent private key"));
+    }
+    for (i, &e) in pad.iter().enumerate() {
+        if e != 1 + i as u8 {
+            return Err(anyhow!("erroneous padding in private key"));
+        }
+    }
 
-    ;; kdfoptions field.
-    ;; This one is actually a buffer with size determined by the
-    ;; uint32 value, which preceeds it.
-    ;; If no encryption was used to protect the private key,
-    ;; it's contents will be the [0x00 0x00 0x00 0x00] bytes (empty string).
-    ;; You should read the embedded buffer, only if it's size is
-    ;; different than 0.
-    uint32 (size of buffer)
-        string salt
-        uint32 rounds
+    let key = SecretKey::ed25519_from_bytes(seckey, pubkey3, comment)?;
 
-    ;; Number of keys embedded within the blob.
-    ;; This value is always set to 1, at least in the
-    ;; current implementation of the private key format.
-    uint32 number-of-keys
+    print!("{}", PublicKey::from(key.clone()));
 
-    ;; Public key section.
-    ;; This one is a buffer, in which the public key is embedded.
-    ;; Size of the buffer is determined by the uint32 value,
-    ;; which preceeds it.
-    ;; ED25519 public key components.
-    uint32 (size of buffer)
-        string keytype ("ssh-ed25519")
-
-        ;; The ED25519 public key is a buffer of size 32.
-        ;; The encoding follows the same rules for any
-        ;; other buffer used by SSH -- the size of the
-        ;; buffer preceeds the actual data.
-        uint32 + byte[32]
-
-    ;; Encrypted section
-    ;; This one is a again a buffer with size
-    ;; specified by the uint32 value, which preceeds it.
-    ;; ED25519 private key.
-    uint32 (size of buffer)
-        uint32  check-int
-        uint32  check-int  (must match with previous check-int value)
-        string  keytype    ("ssh-ed25519")
-
-        ;; The public key
-        uint32 + byte[32]  (public key)
-
-        ;; Secret buffer. This is a buffer with size 64 bytes.
-        ;; The bytes[0..32] contain the private key and
-        ;; bytes[32..64] contain the public key.
-        ;; Once decoded you can extract the private key by
-        ;; taking the byte[0..32] slice.
-        uint32 + byte[64]  (secret buffer)
-
-        string  comment    (Comment associated with the key)
-        byte[n] padding    (Padding according to the rules above)
-    */
-    Ok(SecretKey(binary))
+    Ok(key)
 }
 
 pub fn read_secret_key(key_file: &str) -> Result<SecretKey> {
