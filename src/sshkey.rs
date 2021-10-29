@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 
+use crate::askpass::AskPass;
+
 const PREFIX: &[u8] = b"-----BEGIN OPENSSH PRIVATE KEY-----\n";
 const SUFFIX: &[u8] = b"-----END OPENSSH PRIVATE KEY-----\n";
 
@@ -27,13 +29,13 @@ impl From<SecretKey> for PublicKey {
     }
 }
 
-fn ed25519_from_bytes(key: &[u8]) -> Result<[u8; 32]> {
-    key.try_into().with_context(|| "ed25519 key must be 32 bytes")
+fn key256_from_bytes(key: &[u8]) -> Result<[u8; 32]> {
+    key.try_into().with_context(|| "key must be 32 bytes")
 }
 
 impl PublicKey {
     fn ed25519_from_bytes(public: &[u8], comment: &[u8]) -> Result<PublicKey> {
-        let public = ed25519_from_bytes(public)?;
+        let public = key256_from_bytes(public)?;
         let comment = String::from_utf8(comment.to_owned())?;
         Ok(PublicKey::Ed25519 { public, comment })
     }
@@ -45,8 +47,8 @@ impl SecretKey {
         public: &[u8],
         comment: &[u8],
     ) -> Result<SecretKey> {
-        let secret = ed25519_from_bytes(secret)?;
-        let public = ed25519_from_bytes(public)?;
+        let secret = key256_from_bytes(secret)?;
+        let public = key256_from_bytes(public)?;
         let comment = String::from_utf8(comment.to_owned())?;
         Ok(SecretKey::Ed25519 { secret, public, comment })
     }
@@ -70,9 +72,9 @@ impl std::fmt::Display for PublicKey {
 
 fn bcrypt_aes_decrypt(
     secrets: &mut [u8],
-    password: &str,
     salt: &[u8],
     rounds: u32,
+    mut askpass: AskPass,
 ) -> Result<()> {
     use aes::cipher::generic_array::GenericArray;
     use aes::cipher::NewCipher;
@@ -81,8 +83,9 @@ fn bcrypt_aes_decrypt(
     const KEY_LEN: usize = 32;
     const IV_LEN: usize = 16;
 
+    let password = askpass()?;
     let mut aes_key_iv = [0u8; KEY_LEN + IV_LEN];
-    bcrypt_pbkdf::bcrypt_pbkdf(password, salt, rounds, &mut aes_key_iv)?;
+    bcrypt_pbkdf::bcrypt_pbkdf(&password, salt, rounds, &mut aes_key_iv)?;
 
     let aes_key = GenericArray::from_slice(&aes_key_iv[0..KEY_LEN]);
     let aes_iv = GenericArray::from_slice(&aes_key_iv[KEY_LEN..]);
@@ -93,7 +96,9 @@ fn bcrypt_aes_decrypt(
     Ok(())
 }
 
-pub fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
+// See https://dnaeon.github.io/openssh-private-key-binary-format/
+//
+pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
     use nom::branch::*;
     use nom::bytes::complete::*;
     use nom::combinator::*;
@@ -153,7 +158,7 @@ pub fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
         if encrypted.len() % 16 != 0 {
             return Err(anyhow!("bad alignment in private key"));
         } else {
-            bcrypt_aes_decrypt(&mut secrets, "testing", salt, rounds)?;
+            bcrypt_aes_decrypt(&mut secrets, salt, rounds, askpass)?;
         }
     } else if encrypted.len() % 8 != 0 {
         return Err(anyhow!("bad alignment in private key"));
@@ -185,16 +190,12 @@ pub fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
         }
     }
 
-    let key = SecretKey::ed25519_from_bytes(seckey, pubkey3, comment)?;
-
-    print!("{}", PublicKey::from(key.clone()));
-
-    Ok(key)
+    SecretKey::ed25519_from_bytes(seckey, pubkey3, comment)
 }
 
-pub fn read_secret_key(key_file: &str) -> Result<SecretKey> {
+pub fn read_secret_key(key_file: &str, askpass: AskPass) -> Result<SecretKey> {
     let ascii = std::fs::read(key_file)
         .with_context(|| format!("failed to read {}", key_file))?;
-    parse_secret_key(&ascii)
+    parse_secret_key(&ascii, askpass)
         .map_err(|err| anyhow!("could not parse {}: {}", key_file, err))
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use getopts::Options;
 
+mod askpass;
 mod sshkey;
 
 fn usage(progname: &str, opts: Options, status: i32) {
@@ -46,7 +47,11 @@ fn main() -> Result<()> {
         // usage(progname, opts, 1);
     }
 
-    print!("{:#?}", sshkey::read_secret_key("id_ed25519")?);
+    use sshkey::*;
+
+    let key_file = "id_ed25519.clear";
+    let askpass = askpass::for_file(key_file);
+    print!("{}", PublicKey::from(read_secret_key(key_file, askpass)?));
 
     Ok(())
 }

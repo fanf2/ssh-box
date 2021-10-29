@@ -5,4 +5,4 @@ it:
 	cargo clippy
 	cargo doc --no-deps
 	cargo test
-	cargo run
+	cargo run </dev/null
