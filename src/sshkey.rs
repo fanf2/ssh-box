@@ -74,6 +74,7 @@ fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
     use aes::cipher::generic_array::GenericArray;
     use aes::cipher::NewCipher;
     use aes::cipher::StreamCipher;
+    use nom::branch::*;
     use nom::bytes::complete::*;
     use nom::combinator::*;
     use nom::multi::*;
@@ -93,44 +94,52 @@ fn parse_secret_key(ascii: &[u8]) -> Result<SecretKey> {
     let len_tag = |bytes: &'static [u8]| length_value(be_u32, tag(bytes));
     let be_u32_is = |wanted| verify(be_u32, move |&found| found == wanted);
     let ssh_string = || length_data(be_u32);
+    let ssh_magic = || tag(b"openssh-key-v1\0");
 
-    let parse_preamble = tuple((
-        tag(b"openssh-key-v1\0"),
-        len_tag(b"aes256-ctr"),
-        len_tag(b"bcrypt"),
-    ));
-
-    let parse_bcrypt_params =
-        map_parser(ssh_string(), pair(ssh_string(), be_u32));
-
-    let parse_pubkey = map_parser(
-        ssh_string(),
-        preceded(len_tag(b"ssh-ed25519"), ssh_string()),
+    let parse_bcrypt_params = map(
+        preceded(
+            tuple((ssh_magic(), len_tag(b"aes256-ctr"), len_tag(b"bcrypt"))),
+            map_parser(ssh_string(), pair(ssh_string(), be_u32)),
+        ),
+        Some,
     );
 
-    let (_, (_preamble, (salt, rounds), _keycount, pubkey1, encrypted, _eof)) =
-        tuple((
-            parse_preamble,
-            parse_bcrypt_params,
-            be_u32_is(1),
-            parse_pubkey,
+    let parse_none_params = map(
+        tuple((ssh_magic(), len_tag(b"none"), len_tag(b"none"), be_u32_is(0))),
+        |_| None,
+    );
+
+    let parse_pubkey = preceded(
+        be_u32_is(1),
+        map_parser(
             ssh_string(),
-            eof,
-        ))(&binary[..])
-        .map_err(|_: NomErr| anyhow!("could not parse private key"))?;
+            preceded(len_tag(b"ssh-ed25519"), ssh_string()),
+        ),
+    );
 
-    const KEY_LEN: usize = 32;
-    const IV_LEN: usize = 16;
+    let (_, (params, pubkey1, encrypted, _eof)) = tuple((
+        alt((parse_bcrypt_params, parse_none_params)),
+        parse_pubkey,
+        ssh_string(),
+        eof,
+    ))(&binary[..])
+    .map_err(|_: NomErr| anyhow!("could not parse private key"))?;
 
-    let mut aes_key_iv = [0u8; KEY_LEN + IV_LEN];
-    bcrypt_pbkdf::bcrypt_pbkdf("testing", salt, rounds, &mut aes_key_iv)?;
-
-    let aes_key = GenericArray::from_slice(&aes_key_iv[0..KEY_LEN]);
-    let aes_iv = GenericArray::from_slice(&aes_key_iv[KEY_LEN..]);
-
-    let mut cipher = aes::Aes256Ctr::new(aes_key, aes_iv);
     let mut secrets = encrypted.to_owned();
-    cipher.apply_keystream(&mut secrets);
+
+    if let Some((salt, rounds)) = params {
+        const KEY_LEN: usize = 32;
+        const IV_LEN: usize = 16;
+
+        let mut aes_key_iv = [0u8; KEY_LEN + IV_LEN];
+        bcrypt_pbkdf::bcrypt_pbkdf("testing", salt, rounds, &mut aes_key_iv)?;
+
+        let aes_key = GenericArray::from_slice(&aes_key_iv[0..KEY_LEN]);
+        let aes_iv = GenericArray::from_slice(&aes_key_iv[KEY_LEN..]);
+
+        let mut cipher = aes::Aes256Ctr::new(aes_key, aes_iv);
+        cipher.apply_keystream(&mut secrets);
+    }
 
     let parse_seckey =
         map_parser(ssh_string(), pair(take(32usize), take(32usize)));
