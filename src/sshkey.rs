@@ -4,9 +4,6 @@ use sodiumoxide::crypto::sign::ed25519;
 use crate::askpass::AskPass;
 use crate::util::*;
 
-const PREFIX: &[u8] = b"-----BEGIN OPENSSH PRIVATE KEY-----\n";
-const SUFFIX: &[u8] = b"-----END OPENSSH PRIVATE KEY-----\n";
-
 pub use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,13 +50,7 @@ pub fn read_secret_key(
 }
 
 pub fn parse_public_keys(ascii: &[u8]) -> Result<Vec<Named<PublicKey>>> {
-    use nom::branch::*;
-    use nom::bytes::complete::*;
-    use nom::character::complete::*;
-    use nom::combinator::*;
-    use nom::multi::*;
-    use nom::number::complete::*;
-    use nom::sequence::*;
+    use crate::util::nom::*;
 
     fn ssh_ed25519(armor: &[u8], comment: &str) -> Result<Named<PublicKey>> {
         let binary = base64::decode(armor)?;
@@ -159,13 +150,10 @@ pub fn parse_secret_key(
     ascii: &[u8],
     askpass: AskPass,
 ) -> Result<Named<SecretKey>> {
-    use nom::branch::*;
-    use nom::bytes::complete::*;
-    use nom::combinator::*;
-    use nom::multi::*;
-    use nom::number::complete::*;
-    use nom::sequence::*;
+    use crate::util::nom::*;
 
+    const PREFIX: &[u8] = b"-----BEGIN OPENSSH PRIVATE KEY-----\n";
+    const SUFFIX: &[u8] = b"-----END OPENSSH PRIVATE KEY-----\n";
     let binary = base64::unarmor(ascii, PREFIX, SUFFIX)?;
 
     let be_u32_is = |wanted| verify(be_u32, move |&found| found == wanted);
