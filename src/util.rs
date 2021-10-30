@@ -1,6 +1,38 @@
-pub fn append_ssh_string(buffer: &mut Vec<u8>, string: &[u8]) {
-    buffer.extend_from_slice(&(string.len() as u32).to_be_bytes());
-    buffer.extend_from_slice(string);
+pub struct SshBuffer(Vec<u8>);
+
+impl std::ops::Deref for SshBuffer {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for SshBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl std::convert::AsRef<[u8]> for SshBuffer {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl SshBuffer {
+    pub fn new() -> Self {
+        SshBuffer(Vec::new())
+    }
+
+    pub fn add_u32(&mut self, n: u32) {
+        self.extend_from_slice(&n.to_be_bytes());
+    }
+
+    pub fn add_string(&mut self, string: &[u8]) {
+        self.add_u32(string.len() as u32);
+        self.extend_from_slice(string);
+    }
 }
 
 pub mod nom {
@@ -24,7 +56,6 @@ pub mod nom {
 }
 
 pub mod base64 {
-    use super::*;
     use anyhow::{anyhow, Result};
     use sodiumoxide::base64::Variant;
 

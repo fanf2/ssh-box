@@ -26,10 +26,10 @@ impl Named<SecretKey> {
 
 impl std::fmt::Display for Named<PublicKey> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut binary = Vec::new();
+        let mut binary = SshBuffer::new();
         let algo = "ssh-ed25519";
-        append_ssh_string(&mut binary, algo.as_bytes());
-        append_ssh_string(&mut binary, self.key.as_ref());
+        binary.add_string(algo.as_bytes());
+        binary.add_string(self.key.as_ref());
         writeln!(f, "{} {} {}", algo, base64::encode(binary), self.name)
     }
 }
