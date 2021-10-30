@@ -2,6 +2,7 @@ use anyhow::Result;
 use getopts::Options;
 
 mod askpass;
+mod base64;
 mod sshkey;
 
 fn usage(progname: &str, opts: Options, status: i32) {
@@ -51,7 +52,7 @@ fn main() -> Result<()> {
 
     let key_file = "id_ed25519.clear";
     let askpass = askpass::for_file(key_file);
-    print!("{}", PublicKey::from(read_secret_key(key_file, askpass)?));
+    print!("{}", read_secret_key(key_file, askpass)?.public_key());
 
     Ok(())
 }

@@ -7,9 +7,9 @@ edition = "2021"
 [dependencies]
 aes = { version = "~0", features = ["ctr"] }
 anyhow = "~1"
-base64 = "~0"
 bcrypt-pbkdf = "~0"
 getopts = "~0"
 atty = "~0"
 nom = "~7"
 rpassword = "~5"
+sodiumoxide = "~0"

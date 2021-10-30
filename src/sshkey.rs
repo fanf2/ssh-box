@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Context, Result};
+use sodiumoxide::crypto::sign::ed25519;
 
 use crate::askpass::AskPass;
+use crate::base64;
 
 const PREFIX: &[u8] = b"-----BEGIN OPENSSH PRIVATE KEY-----\n";
 const SUFFIX: &[u8] = b"-----END OPENSSH PRIVATE KEY-----\n";
@@ -13,82 +15,56 @@ const LDH: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
                      ABCDEFGHIJKLMNOPQRSTUVWXYZ\
                      0123456789-_";
 
+pub use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Named<Key> {
+    key: Key,
+    name: String,
+}
+
 type NomErr<'a> = nom::Err<nom::error::Error<&'a [u8]>>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PublicKey {
-    Ed25519 { public: [u8; 32], comment: String },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SecretKey {
-    Ed25519 { secret: [u8; 32], public: [u8; 32], comment: String },
-}
-
-impl From<SecretKey> for PublicKey {
-    fn from(secret: SecretKey) -> PublicKey {
-        match secret {
-            SecretKey::Ed25519 { secret: _, public, comment } => {
-                PublicKey::Ed25519 { public, comment }
-            }
-        }
+impl From<Named<SecretKey>> for Named<PublicKey> {
+    fn from(secret: Named<SecretKey>) -> Named<PublicKey> {
+        Named { key: secret.key.public_key(), name: secret.name }
     }
 }
 
-fn key256_from_raw(key: &[u8]) -> Result<[u8; 32]> {
-    key.try_into().with_context(|| "key must be 32 bytes")
-}
-
-impl PublicKey {
-    fn ed25519_from_raw(public: &[u8], comment: &str) -> Result<PublicKey> {
-        let public = key256_from_raw(public)?;
-        let comment = comment.to_owned();
-        Ok(PublicKey::Ed25519 { public, comment })
+impl Named<SecretKey> {
+    pub fn public_key(self) -> Named<PublicKey> {
+        self.into()
     }
 }
 
-impl SecretKey {
-    fn ed25519_from_raw(
-        secret: &[u8],
-        public: &[u8],
-        comment: &str,
-    ) -> Result<SecretKey> {
-        let secret = key256_from_raw(secret)?;
-        let public = key256_from_raw(public)?;
-        let comment = comment.to_owned();
-        Ok(SecretKey::Ed25519 { secret, public, comment })
-    }
-}
-
-impl std::fmt::Display for PublicKey {
+impl std::fmt::Display for Named<PublicKey> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PublicKey::Ed25519 { public, comment } => {
-                let mut binary = Vec::new();
-                let algo = "ssh-ed25519";
-                binary.extend_from_slice(&u32::to_be_bytes(algo.len() as u32));
-                binary.extend_from_slice(algo.as_bytes());
-                binary.extend_from_slice(&u32::to_be_bytes(32));
-                binary.extend_from_slice(public);
-                writeln!(f, "{} {} {}", algo, base64::encode(binary), comment)
-            }
-        }
+        let mut binary = Vec::new();
+        let algo = "ssh-ed25519";
+        binary.extend_from_slice(&u32::to_be_bytes(algo.len() as u32));
+        binary.extend_from_slice(algo.as_bytes());
+        binary.extend_from_slice(&u32::to_be_bytes(32));
+        binary.extend_from_slice(self.key.as_ref());
+        writeln!(f, "{} {} {}", algo, base64::encode(binary), self.name)
     }
 }
 
-pub fn read_public_keys(key_file: &str) -> Result<Vec<PublicKey>> {
+pub fn read_public_keys(key_file: &str) -> Result<Vec<Named<PublicKey>>> {
     let context = || format!("failed to read {}", key_file);
     let ascii = std::fs::read(key_file).with_context(context)?;
     parse_public_keys(&ascii).with_context(context)
 }
 
-pub fn read_secret_key(key_file: &str, askpass: AskPass) -> Result<SecretKey> {
+pub fn read_secret_key(
+    key_file: &str,
+    askpass: AskPass,
+) -> Result<Named<SecretKey>> {
     let context = || format!("failed to read {}", key_file);
     let ascii = std::fs::read(key_file).with_context(context)?;
     parse_secret_key(&ascii, askpass).with_context(context)
 }
 
-pub fn parse_public_keys(ascii: &[u8]) -> Result<Vec<PublicKey>> {
+pub fn parse_public_keys(ascii: &[u8]) -> Result<Vec<Named<PublicKey>>> {
     use nom::branch::*;
     use nom::bytes::complete::*;
     use nom::character::complete::*;
@@ -97,22 +73,24 @@ pub fn parse_public_keys(ascii: &[u8]) -> Result<Vec<PublicKey>> {
     use nom::number::complete::*;
     use nom::sequence::*;
 
-    fn ssh_ed25519(armor: &[u8], comment: &str) -> Result<PublicKey> {
+    fn ssh_ed25519(armor: &[u8], comment: &str) -> Result<Named<PublicKey>> {
         let binary = base64::decode(armor)?;
-        let (_, pubkey) = delimited(
+        let (_, rawkey) = delimited(
             length_value(be_u32, tag(b"ssh-ed25519")),
             length_data(be_u32),
             eof,
         )(&binary[..])
         .map_err(|_: NomErr| anyhow!("invalid ed25519 public key"))?;
-        PublicKey::ed25519_from_raw(pubkey, comment)
+        let pubkey = PublicKey::from_slice(rawkey)
+            .ok_or_else(|| anyhow!("invalid ed25519 public key"))?;
+        Ok(Named { key: pubkey, name: comment.to_owned() })
     }
 
     fn ssh_pubkey(
         algo: &[u8],
         armor: &[u8],
         comment: &[u8],
-    ) -> Result<PublicKey> {
+    ) -> Result<Named<PublicKey>> {
         let algo = std::str::from_utf8(algo)?;
         let comment = std::str::from_utf8(comment)?;
         if algo == "ssh-ed25519" {
@@ -183,7 +161,10 @@ fn bcrypt_aes_decrypt(
 
 // See https://dnaeon.github.io/openssh-private-key-binary-format/
 //
-pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
+pub fn parse_secret_key(
+    ascii: &[u8],
+    askpass: AskPass,
+) -> Result<Named<SecretKey>> {
     use nom::branch::*;
     use nom::bytes::complete::*;
     use nom::combinator::*;
@@ -243,11 +224,8 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
         return Err(anyhow!("bad alignment in private key"));
     }
 
-    let parse_seckey =
-        map_parser(ssh_string(), pair(take(32usize), take(32usize)));
-
-    let (pad, (check1, check2, pubkey2, (seckey, pubkey3), comment)) =
-        tuple((be_u32, be_u32, ssh_ed25519(), parse_seckey, ssh_string()))(
+    let (pad, (check1, check2, pubkey2, rawkey, comment)) =
+        tuple((be_u32, be_u32, ssh_ed25519(), ssh_string(), ssh_string()))(
             &secrets[..],
         )
         .map_err(|_: NomErr| anyhow!("could not parse encrypted key"))?;
@@ -255,17 +233,21 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
     if check1 != check2 {
         return Err(anyhow!("could not decrypt private key"));
     }
-    if pubkey1 != pubkey2 || pubkey2 != pubkey3 {
-        return Err(anyhow!("inconsistent private key"));
-    }
     for (i, &e) in pad.iter().enumerate() {
         if e != 1 + i as u8 {
             return Err(anyhow!("erroneous padding in private key"));
         }
     }
 
-    let comment = std::str::from_utf8(comment)?;
-    SecretKey::ed25519_from_raw(seckey, pubkey3, comment)
+    let seckey = SecretKey::from_slice(rawkey)
+        .ok_or_else(|| anyhow!("invalid ed25519 secret key"))?;
+
+    if pubkey1 != pubkey2 || pubkey1 != seckey.public_key().as_ref() {
+        return Err(anyhow!("inconsistent private key"));
+    }
+
+    let comment = String::from_utf8(comment.to_owned())?;
+    Ok(Named { key: seckey, name: comment })
 }
 
 #[cfg(test)]
@@ -310,13 +292,13 @@ mod test {
 
         let seckey = sec_none.clone();
 
-        let pub_none = format!("{}", PublicKey::from(sec_none));
-        let pub_bcrypt = format!("{}", PublicKey::from(sec_bcrypt));
+        let pub_none = format!("{}", sec_none.public_key());
+        let pub_bcrypt = format!("{}", sec_bcrypt.public_key());
         assert_eq!(pub_none, PUBLIC);
         assert_eq!(pub_bcrypt, PUBLIC);
 
         let pubkey = parse_public_keys(PUBLIC.as_bytes()).unwrap();
         assert!(pubkey.len() == 1);
-        assert_eq!(pubkey[0], PublicKey::from(seckey));
+        assert_eq!(pubkey[0], seckey.public_key());
     }
 }
