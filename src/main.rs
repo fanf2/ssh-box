@@ -2,8 +2,8 @@ use anyhow::Result;
 use getopts::Options;
 
 mod askpass;
-mod base64;
 mod sshkey;
+mod util;
 
 fn usage(progname: &str, opts: Options, status: i32) {
     let brief = format!("usage: {} {{-c|-d|-e|-l}} [options]", progname);
@@ -49,6 +49,7 @@ fn main() -> Result<()> {
     }
 
     use sshkey::*;
+    sodiumoxide::init();
 
     let key_file = "id_ed25519.clear";
     let askpass = askpass::for_file(key_file);

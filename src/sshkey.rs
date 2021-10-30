@@ -2,18 +2,10 @@ use anyhow::{anyhow, Context, Result};
 use sodiumoxide::crypto::sign::ed25519;
 
 use crate::askpass::AskPass;
-use crate::base64;
+use crate::util::*;
 
 const PREFIX: &[u8] = b"-----BEGIN OPENSSH PRIVATE KEY-----\n";
 const SUFFIX: &[u8] = b"-----END OPENSSH PRIVATE KEY-----\n";
-
-const BASE64: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
-                        ABCDEFGHIJKLMNOPQRSTUVWXYZ\
-                        0123456789/+=";
-
-const LDH: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
-                     ABCDEFGHIJKLMNOPQRSTUVWXYZ\
-                     0123456789-_";
 
 pub use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 
@@ -22,8 +14,6 @@ pub struct Named<Key> {
     key: Key,
     name: String,
 }
-
-type NomErr<'a> = nom::Err<nom::error::Error<&'a [u8]>>;
 
 impl From<Named<SecretKey>> for Named<PublicKey> {
     fn from(secret: Named<SecretKey>) -> Named<PublicKey> {
@@ -41,10 +31,8 @@ impl std::fmt::Display for Named<PublicKey> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut binary = Vec::new();
         let algo = "ssh-ed25519";
-        binary.extend_from_slice(&u32::to_be_bytes(algo.len() as u32));
-        binary.extend_from_slice(algo.as_bytes());
-        binary.extend_from_slice(&u32::to_be_bytes(32));
-        binary.extend_from_slice(self.key.as_ref());
+        append_ssh_string(&mut binary, algo.as_bytes());
+        append_ssh_string(&mut binary, self.key.as_ref());
         writeln!(f, "{} {} {}", algo, base64::encode(binary), self.name)
     }
 }
@@ -103,7 +91,13 @@ pub fn parse_public_keys(ascii: &[u8]) -> Result<Vec<Named<PublicKey>>> {
     }
 
     let key = map(
-        tuple((is_a(LDH), space1, is_a(BASE64), space0, not_line_ending)),
+        tuple((
+            is_a(LDH_CHARS),
+            space1,
+            is_a(BASE64_CHARS),
+            space0,
+            not_line_ending,
+        )),
         |(algo, _s1, armor, _s2, comment)| {
             Ok(Some(ssh_pubkey(algo, armor, comment)?))
         },
@@ -172,15 +166,7 @@ pub fn parse_secret_key(
     use nom::number::complete::*;
     use nom::sequence::*;
 
-    let mut unarmor = delimited(
-        tag(PREFIX),
-        separated_list1(tag(b"\n"), is_a(BASE64)),
-        tuple((tag(b"\n"), tag(SUFFIX), eof)),
-    );
-    let (_, base64_lines) = unarmor(ascii)
-        .map_err(|_: NomErr| anyhow!("could not find private key base64"))?;
-
-    let binary = base64::decode(base64_lines.concat())?;
+    let binary = base64::unarmor(ascii, PREFIX, SUFFIX)?;
 
     let be_u32_is = |wanted| verify(be_u32, move |&found| found == wanted);
     let len_tag = |bytes: &'static [u8]| length_value(be_u32, tag(bytes));
