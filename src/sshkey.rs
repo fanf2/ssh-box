@@ -76,6 +76,18 @@ impl std::fmt::Display for PublicKey {
     }
 }
 
+pub fn read_public_keys(key_file: &str) -> Result<Vec<PublicKey>> {
+    let context = || format!("failed to read {}", key_file);
+    let ascii = std::fs::read(key_file).with_context(context)?;
+    parse_public_keys(&ascii).with_context(context)
+}
+
+pub fn read_secret_key(key_file: &str, askpass: AskPass) -> Result<SecretKey> {
+    let context = || format!("failed to read {}", key_file);
+    let ascii = std::fs::read(key_file).with_context(context)?;
+    parse_secret_key(&ascii, askpass).with_context(context)
+}
+
 pub fn parse_public_keys(ascii: &[u8]) -> Result<Vec<PublicKey>> {
     use nom::branch::*;
     use nom::bytes::complete::*;
@@ -203,9 +215,9 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
         Some,
     );
 
-    let parse_none_params = map(
+    let parse_none_params = value(
+        None,
         tuple((ssh_magic(), len_tag(b"none"), len_tag(b"none"), be_u32_is(0))),
-        |_| None,
     );
 
     let parse_pubkey =
@@ -254,13 +266,6 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
 
     let comment = std::str::from_utf8(comment)?;
     SecretKey::ed25519_from_raw(seckey, pubkey3, comment)
-}
-
-pub fn read_secret_key(key_file: &str, askpass: AskPass) -> Result<SecretKey> {
-    let ascii = std::fs::read(key_file)
-        .with_context(|| format!("failed to read {}", key_file))?;
-    parse_secret_key(&ascii, askpass)
-        .map_err(|err| anyhow!("could not parse {}: {}", key_file, err))
 }
 
 #[cfg(test)]
