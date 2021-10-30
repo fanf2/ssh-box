@@ -9,6 +9,12 @@ const BASE64: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
                         ABCDEFGHIJKLMNOPQRSTUVWXYZ\
                         0123456789/+=";
 
+const LDH: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
+                     ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                     0123456789-_";
+
+type NomErr<'a> = nom::Err<nom::error::Error<&'a [u8]>>;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PublicKey {
     Ed25519 { public: [u8; 32], comment: String },
@@ -29,26 +35,26 @@ impl From<SecretKey> for PublicKey {
     }
 }
 
-fn key256_from_bytes(key: &[u8]) -> Result<[u8; 32]> {
+fn key256_from_raw(key: &[u8]) -> Result<[u8; 32]> {
     key.try_into().with_context(|| "key must be 32 bytes")
 }
 
 impl PublicKey {
-    fn ed25519_from_bytes(public: &[u8], comment: &[u8]) -> Result<PublicKey> {
-        let public = key256_from_bytes(public)?;
+    fn ed25519_from_raw(public: &[u8], comment: &[u8]) -> Result<PublicKey> {
+        let public = key256_from_raw(public)?;
         let comment = String::from_utf8(comment.to_owned())?;
         Ok(PublicKey::Ed25519 { public, comment })
     }
 }
 
 impl SecretKey {
-    fn ed25519_from_bytes(
+    fn ed25519_from_raw(
         secret: &[u8],
         public: &[u8],
         comment: &[u8],
     ) -> Result<SecretKey> {
-        let secret = key256_from_bytes(secret)?;
-        let public = key256_from_bytes(public)?;
+        let secret = key256_from_raw(secret)?;
+        let public = key256_from_raw(public)?;
         let comment = String::from_utf8(comment.to_owned())?;
         Ok(SecretKey::Ed25519 { secret, public, comment })
     }
@@ -68,6 +74,101 @@ impl std::fmt::Display for PublicKey {
             }
         }
     }
+}
+
+pub fn parse_public_keys(name: &str, ascii: &[u8]) -> Result<Vec<PublicKey>> {
+    use nom::branch::*;
+    use nom::bytes::complete::*;
+    use nom::character::complete::*;
+    use nom::combinator::*;
+    use nom::multi::*;
+    use nom::number::complete::*;
+    use nom::sequence::*;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Line<'a> {
+        Empty,
+        Comment,
+        Key(&'a [u8], &'a [u8]),
+        Unknown(&'a [u8]),
+        UnkNamed(&'a [u8], &'a [u8]),
+        Invalid,
+    }
+    use Line::*;
+
+    let empty = value(Empty, pair(space0, line_ending));
+    let comment = value(
+        Comment,
+        tuple((space0, tag(b"#"), not_line_ending, line_ending)),
+    );
+    let key = map(
+        tuple((
+            is_a(LDH),
+            space1,
+            is_a(BASE64),
+            space0,
+            not_line_ending,
+            line_ending,
+        )),
+        |(algo, _s1, armor, _s2, comment, _nl)| {
+            if algo == b"ssh-ed25519" {
+                Key(armor, comment)
+            } else if comment.is_empty() {
+                Unknown(algo)
+            } else {
+                UnkNamed(algo, comment)
+            }
+        },
+    );
+    let invalid = value(Invalid, pair(not_line_ending, line_ending));
+    let line = alt((empty, comment, key, invalid));
+
+    let (rest, mut lines) = many0(line)(ascii).map_err(|_: NomErr| {
+        anyhow!("could not parse public key file {}", name)
+    })?;
+    if !rest.is_empty() {
+        lines.push(Invalid);
+    }
+
+    let mut keys = Vec::new();
+    for (lino, line) in lines.iter().enumerate() {
+        match line {
+            Empty | Comment => (),
+            Key(armor, comment) => {
+                let binary = base64::decode(armor)?;
+                let (_, pubkey) = delimited(
+                    length_value(be_u32, tag(b"ssh-ed25519")),
+                    length_data(be_u32),
+                    eof,
+                )(&binary[..])
+                .map_err(|_: NomErr| {
+                    anyhow!("invalid ed25519 key at {} line {}", name, lino)
+                })?;
+                keys.push(
+                    PublicKey::ed25519_from_raw(pubkey, comment).with_context(
+                        || format!("at {} line {}", name, lino),
+                    )?,
+                );
+            }
+            Unknown(algo) => {
+                let algo = std::str::from_utf8(algo)?;
+                eprintln!("{}:{}: unknown key type {}", name, lino, algo);
+            }
+            UnkNamed(algo, comment) => {
+                let algo = std::str::from_utf8(algo)?;
+                let comment = std::str::from_utf8(comment)?;
+                eprintln!(
+                    "{}:{}: unknown key type {} for {}",
+                    name, lino, algo, comment
+                );
+            }
+            Invalid => {
+                eprintln!("{}:{}: could not parse key", name, lino)
+            }
+        }
+    }
+
+    Ok(keys)
 }
 
 fn bcrypt_aes_decrypt(
@@ -106,8 +207,6 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
     use nom::number::complete::*;
     use nom::sequence::*;
 
-    type NomErr<'a> = nom::Err<nom::error::Error<&'a [u8]>>;
-
     let mut unarmor = delimited(
         tag(PREFIX),
         separated_list1(tag(b"\n"), is_a(BASE64)),
@@ -118,9 +217,10 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
 
     let binary = base64::decode(base64_lines.concat())?;
 
-    let len_tag = |bytes: &'static [u8]| length_value(be_u32, tag(bytes));
     let be_u32_is = |wanted| verify(be_u32, move |&found| found == wanted);
+    let len_tag = |bytes: &'static [u8]| length_value(be_u32, tag(bytes));
     let ssh_string = || length_data(be_u32);
+    let ssh_ed25519 = || preceded(len_tag(b"ssh-ed25519"), ssh_string());
     let ssh_magic = || tag(b"openssh-key-v1\0");
 
     let parse_bcrypt_params = map(
@@ -136,13 +236,8 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
         |_| None,
     );
 
-    let parse_pubkey = preceded(
-        be_u32_is(1),
-        map_parser(
-            ssh_string(),
-            preceded(len_tag(b"ssh-ed25519"), ssh_string()),
-        ),
-    );
+    let parse_pubkey =
+        preceded(be_u32_is(1), map_parser(ssh_string(), ssh_ed25519()));
 
     let (_, (cipher_params, pubkey1, encrypted, _eof)) = tuple((
         alt((parse_bcrypt_params, parse_none_params)),
@@ -167,15 +262,10 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
     let parse_seckey =
         map_parser(ssh_string(), pair(take(32usize), take(32usize)));
 
-    let (pad, (check1, check2, _type, pubkey2, (seckey, pubkey3), comment)) =
-        tuple((
-            be_u32,
-            be_u32,
-            len_tag(b"ssh-ed25519"),
-            ssh_string(),
-            parse_seckey,
-            ssh_string(),
-        ))(&secrets[..])
+    let (pad, (check1, check2, pubkey2, (seckey, pubkey3), comment)) =
+        tuple((be_u32, be_u32, ssh_ed25519(), parse_seckey, ssh_string()))(
+            &secrets[..],
+        )
         .map_err(|_: NomErr| anyhow!("could not parse encrypted key"))?;
 
     if check1 != check2 {
@@ -190,7 +280,7 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
         }
     }
 
-    SecretKey::ed25519_from_bytes(seckey, pubkey3, comment)
+    SecretKey::ed25519_from_raw(seckey, pubkey3, comment)
 }
 
 pub fn read_secret_key(key_file: &str, askpass: AskPass) -> Result<SecretKey> {
