@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Context, Result};
-use sodiumoxide::crypto::sign::ed25519;
 
 use crate::askpass::AskPass;
 use crate::util::*;
@@ -8,8 +7,8 @@ pub use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Named<Key> {
-    key: Key,
-    name: String,
+    pub key: Key,
+    pub name: String,
 }
 
 impl From<Named<SecretKey>> for Named<PublicKey> {
@@ -27,10 +26,8 @@ impl Named<SecretKey> {
 impl std::fmt::Display for Named<PublicKey> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut binary = SshBuffer::new();
-        let algo = "ssh-ed25519";
-        binary.add_string(algo.as_bytes());
-        binary.add_string(self.key.as_ref());
-        writeln!(f, "{} {} {}", algo, base64::encode(binary), self.name)
+        binary.add_pubkey(&self.key);
+        writeln!(f, "ssh-ed25519 {} {}", base64::encode(&binary), self.name)
     }
 }
 

@@ -2,6 +2,7 @@ use anyhow::Result;
 use getopts::Options;
 
 mod askpass;
+mod sshbox;
 mod sshkey;
 mod util;
 
