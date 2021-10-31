@@ -5,11 +5,13 @@ use sodiumoxide::crypto::sign::ed25519;
 use sodiumoxide::utils::memzero;
 use std::fmt::Write;
 
+use crate::base64;
+use crate::key;
 use crate::sshkey::*;
 use crate::util::*;
 
-const PREFIX: &[u8] = b"-----BEGIN SSH-BOX ENCRYPTED FILE-----\n";
-const SUFFIX: &[u8] = b"-----END SSH-BOX ENCRYPTED FILE-----\n";
+const PREFIX: &str = "-----BEGIN SSH-BOX ENCRYPTED FILE-----\n";
+const SUFFIX: &str = "-----END SSH-BOX ENCRYPTED FILE-----\n";
 
 const MAGIC: &[u8] = b"ssh-box-v1\0";
 
@@ -82,10 +84,7 @@ pub fn decrypt(
     Ok(cleartext)
 }
 
-pub fn encrypt(
-    recipients: &[Named<PublicKey>],
-    message: &[u8],
-) -> Result<Vec<u8>> {
+pub fn encrypt(recipients: &[key::Public], message: &[u8]) -> Result<String> {
     let nonce = aead::gen_nonce();
     let key = aead::gen_key();
 
@@ -98,12 +97,9 @@ pub fn encrypt(
     binary.add_u32(recipients.len() as u32);
 
     for pubkey in recipients {
-        let enckey = ed25519::to_curve25519_pk(&pubkey.key)
-            .map_err(|_| anyhow!("could not encrypt using {}", pubkey.name))?;
-        let encrypted = sealedbox::seal(&secrets, &enckey);
-        binary.add_pubkey(&pubkey.key);
-        binary.add_string(pubkey.name.as_bytes());
-        binary.add_string(&encrypted);
+        binary.add_string(&pubkey.repr);
+        binary.add_string(pubkey.comment.as_bytes());
+        binary.add_string(&pubkey.encrypt(&secrets)?);
     }
     memzero(&mut secrets);
 

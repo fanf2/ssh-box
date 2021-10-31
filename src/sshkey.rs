@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 
 use crate::askpass::AskPass;
+use crate::base64;
 use crate::util::*;
 
 pub use sodiumoxide::crypto::sign::{PublicKey, SecretKey};
@@ -31,12 +32,6 @@ impl std::fmt::Display for Named<PublicKey> {
     }
 }
 
-pub fn read_public_keys(key_file: &str) -> Result<Vec<Named<PublicKey>>> {
-    let context = || format!("failed to read {}", key_file);
-    let ascii = std::fs::read(key_file).with_context(context)?;
-    parse_public_keys(&ascii).with_context(context)
-}
-
 pub fn read_secret_key(
     key_file: &str,
     askpass: AskPass,
@@ -44,75 +39,6 @@ pub fn read_secret_key(
     let context = || format!("failed to read {}", key_file);
     let ascii = std::fs::read(key_file).with_context(context)?;
     parse_secret_key(&ascii, askpass).with_context(context)
-}
-
-pub fn parse_public_keys(ascii: &[u8]) -> Result<Vec<Named<PublicKey>>> {
-    use crate::nom::*;
-
-    fn ssh_ed25519(armor: &[u8], comment: &str) -> Result<Named<PublicKey>> {
-        let binary = base64::decode(armor)?;
-        let (_, rawkey) = delimited(
-            length_value(be_u32, tag(b"ssh-ed25519")),
-            length_data(be_u32),
-            eof,
-        )(&binary[..])
-        .map_err(|_: NomErr| anyhow!("invalid ed25519 public key"))?;
-        let pubkey = PublicKey::from_slice(rawkey)
-            .ok_or_else(|| anyhow!("invalid ed25519 public key"))?;
-        Ok(Named { key: pubkey, name: comment.to_owned() })
-    }
-
-    fn ssh_pubkey(
-        algo: &[u8],
-        armor: &[u8],
-        comment: &[u8],
-    ) -> Result<Named<PublicKey>> {
-        let algo = std::str::from_utf8(algo)?;
-        let comment = std::str::from_utf8(comment)?;
-        if algo == "ssh-ed25519" {
-            ssh_ed25519(armor, comment)
-        } else if comment.is_empty() {
-            Err(anyhow!("unknown algorithm {}", algo))
-        } else {
-            Err(anyhow!("unknown algorithm {} for {}", algo, comment))
-        }
-    }
-
-    let key = map(
-        tuple((
-            is_a(LDH_CHARS),
-            space1,
-            is_a(BASE64_CHARS),
-            space0,
-            not_line_ending,
-        )),
-        |(algo, _s1, armor, _s2, comment)| {
-            Ok(Some(ssh_pubkey(algo, armor, comment)?))
-        },
-    );
-    let empty = map(space0, |_| Ok(None));
-    let comment =
-        map(tuple((space0, tag(b"#"), not_line_ending)), |_| Ok(None));
-    let invalid = map(not_line_ending, |_| Err(anyhow!("invalid public key")));
-    let line = terminated(alt((key, empty, comment, invalid)), line_ending);
-
-    let (_, mut lines) = all_consuming(many0(line))(ascii)
-        .map_err(|_: NomErr| anyhow!("could not parse public key file"))?;
-
-    let mut keys = Vec::new();
-    for (lino, line) in lines.drain(..).enumerate() {
-        match line {
-            Ok(Some(key)) => {
-                keys.push(key);
-            }
-            Ok(None) => (),
-            Err(err) => {
-                Err(err).with_context(|| format!("at line {}", lino))?;
-            }
-        }
-    }
-
-    Ok(keys)
 }
 
 fn bcrypt_aes_decrypt(
@@ -149,8 +75,8 @@ pub fn parse_secret_key(
 ) -> Result<Named<SecretKey>> {
     use crate::nom::*;
 
-    const PREFIX: &[u8] = b"-----BEGIN OPENSSH PRIVATE KEY-----\n";
-    const SUFFIX: &[u8] = b"-----END OPENSSH PRIVATE KEY-----\n";
+    const PREFIX: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\n";
+    const SUFFIX: &str = "-----END OPENSSH PRIVATE KEY-----\n";
     let binary = base64::unarmor(ascii, PREFIX, SUFFIX)?;
 
     let ssh_ed25519 = || preceded(len_tag(b"ssh-ed25519"), ssh_string);

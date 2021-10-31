@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use getopts::Options;
 
 mod askpass;
+mod base64;
 mod key;
 mod nom;
 mod sshbox;
@@ -58,9 +59,9 @@ fn main() -> Result<()> {
 
     let pubkey = b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O4SBvM4uWlCN+Fs8P eg\n";
     let message = b"example\n";
-    let recipients = sshkey::parse_public_keys(pubkey)?;
+    let recipients = key::parse_public_keys(pubkey)?;
     let encrypted = sshbox::encrypt(&recipients, message)?;
-    print!("{}", std::str::from_utf8(&encrypted)?);
+    print!("{}", encrypted);
 
     Ok(())
 }
