@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use sodiumoxide::crypto::aead::xchacha20poly1305_ietf as aead;
 use sodiumoxide::crypto::sealedbox;
 use sodiumoxide::crypto::sign::ed25519;
+use sodiumoxide::utils::memzero;
 use std::fmt::Write;
 
 use crate::sshkey::*;
@@ -51,38 +52,33 @@ pub fn decrypt(
     recipient: &Named<SecretKey>,
     message: &[u8],
 ) -> Result<Vec<u8>> {
-    let binary = base64::unarmor(message, PREFIX, SUFFIX)?;
-
-    let (recipients, header, ciphertext) = parse_message(&binary)?;
-
+    let name = &recipient.name;
     let ssh_pubkey = recipient.key.public_key();
-    let mykey = ssh_pubkey.as_ref();
-    let myname = &recipient.name;
 
     let de_pubkey = ed25519::to_curve25519_pk(&ssh_pubkey)
-        .map_err(|_| anyhow!("could not decrypt using {}", myname))?;
+        .map_err(|_| anyhow!("could not decrypt using {}", name))?;
     let de_seckey = ed25519::to_curve25519_sk(&recipient.key)
-        .map_err(|_| anyhow!("could not decrypt using {}", myname))?;
+        .map_err(|_| anyhow!("could not decrypt using {}", name))?;
 
-    let mut secrets = None;
-    for (pubkey, _comment, encrypted) in recipients {
-        if pubkey == mykey {
-            let decrypted = sealedbox::open(encrypted, &de_pubkey, &de_seckey)
-                .map_err(|_| anyhow!("could not decrypt to {}", myname))?;
-            secrets = Some((
-                aead::Nonce::from_slice(&decrypted[0..aead::NONCEBYTES])
-                    .ok_or_else(|| anyhow!("invalid nonce"))?,
-                aead::Key::from_slice(&decrypted[aead::NONCEBYTES..])
-                    .ok_or_else(|| anyhow!("invalid aead key"))?,
-            ));
-        }
-    }
+    let binary = base64::unarmor(message, PREFIX, SUFFIX)?;
+    let (recipients, header, ciphertext) = parse_message(&binary)?;
 
-    let (nonce, key) =
-        secrets.ok_or_else(|| anyhow!("{} is not a recipient", myname))?;
+    let (_, _, encrypted) = recipients
+        .iter()
+        .find(|(pubkey, _, _)| *pubkey == ssh_pubkey.as_ref())
+        .ok_or_else(|| anyhow!("{} is not a recipient", name))?;
+
+    let mut secrets = sealedbox::open(encrypted, &de_pubkey, &de_seckey)
+        .map_err(|_| anyhow!("could not decrypt with {}", name))?;
+    let nonce = aead::Nonce::from_slice(&secrets[0..aead::NONCEBYTES])
+        .ok_or_else(|| anyhow!("invalid nonce"))?;
+    let key = aead::Key::from_slice(&secrets[aead::NONCEBYTES..])
+        .ok_or_else(|| anyhow!("invalid aead key"))?;
 
     let cleartext = aead::open(ciphertext, Some(header), &nonce, &key)
         .map_err(|_| anyhow!("aead decryption failed"))?;
+
+    memzero(&mut secrets);
     Ok(cleartext)
 }
 
@@ -96,7 +92,6 @@ pub fn encrypt(
     let mut secrets = Vec::new();
     secrets.extend_from_slice(nonce.as_ref());
     secrets.extend_from_slice(key.as_ref());
-    let secrets = &secrets[..];
 
     let mut binary = SshBuffer::new();
     binary.extend_from_slice(MAGIC);
@@ -105,11 +100,12 @@ pub fn encrypt(
     for pubkey in recipients {
         let enckey = ed25519::to_curve25519_pk(&pubkey.key)
             .map_err(|_| anyhow!("could not encrypt to {}", pubkey.name))?;
-        let encrypted = sealedbox::seal(secrets, &enckey);
+        let encrypted = sealedbox::seal(&secrets, &enckey);
         binary.add_pubkey(&pubkey.key);
         binary.add_string(pubkey.name.as_bytes());
         binary.add_string(&encrypted);
     }
+    memzero(&mut secrets);
 
     let ciphertext = aead::seal(message, Some(binary.as_ref()), &nonce, &key);
     binary.extend_from_slice(&ciphertext[..]);
