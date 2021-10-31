@@ -153,32 +153,35 @@ pub fn parse_secret_key(
     const SUFFIX: &[u8] = b"-----END OPENSSH PRIVATE KEY-----\n";
     let binary = base64::unarmor(ascii, PREFIX, SUFFIX)?;
 
-    let be_u32_is = |wanted| verify(be_u32, move |&found| found == wanted);
-    let len_tag = |bytes: &'static [u8]| length_value(be_u32, tag(bytes));
-    let ssh_string = || length_data(be_u32);
-    let ssh_ed25519 = || preceded(len_tag(b"ssh-ed25519"), ssh_string());
+    let ssh_ed25519 = || preceded(len_tag(b"ssh-ed25519"), ssh_string);
     let ssh_magic = || tag(b"openssh-key-v1\0");
 
     let parse_bcrypt_params = map(
-        preceded(
+        delimited(
             tuple((ssh_magic(), len_tag(b"aes256-ctr"), len_tag(b"bcrypt"))),
-            map_parser(ssh_string(), pair(ssh_string(), be_u32)),
+            map_parser(ssh_string, pair(ssh_string, be_u32)),
+            be_u32_is(1),
         ),
         Some,
     );
 
     let parse_none_params = value(
         None,
-        tuple((ssh_magic(), len_tag(b"none"), len_tag(b"none"), be_u32_is(0))),
+        tuple((
+            ssh_magic(),
+            len_tag(b"none"),
+            len_tag(b"none"),
+            be_u32_is(0),
+            be_u32_is(1),
+        )),
     );
 
-    let parse_pubkey =
-        preceded(be_u32_is(1), map_parser(ssh_string(), ssh_ed25519()));
+    let parse_pubkey = map_parser(ssh_string, ssh_ed25519());
 
     let (_, (cipher_params, pubkey1, encrypted, _eof)) = tuple((
         alt((parse_bcrypt_params, parse_none_params)),
         parse_pubkey,
-        ssh_string(),
+        ssh_string,
         eof,
     ))(&binary[..])
     .map_err(|_: NomErr| anyhow!("could not parse private key"))?;
@@ -196,7 +199,7 @@ pub fn parse_secret_key(
     }
 
     let (pad, (check1, check2, pubkey2, rawkey, comment)) =
-        tuple((be_u32, be_u32, ssh_ed25519(), ssh_string(), ssh_string()))(
+        tuple((be_u32, be_u32, ssh_ed25519(), ssh_string, ssh_string))(
             &secrets[..],
         )
         .map_err(|_: NomErr| anyhow!("could not parse encrypted key"))?;

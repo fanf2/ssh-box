@@ -4,12 +4,15 @@ use anyhow::{anyhow, Result};
 use getopts::Options;
 
 mod askpass;
+mod key;
+mod nom;
 mod sshbox;
 mod sshkey;
 mod util;
 
 fn usage(progname: &str, opts: Options, status: i32) {
-    let brief = format!("usage: {} {{-c|-d|-e|-l}} [options]", progname);
+    let brief =
+        format!("usage: {} {{-c|-d|-e|-l}} [options] [files]", progname);
     print!("{}", opts.usage(&brief));
     std::process::exit(status);
 }
@@ -21,7 +24,7 @@ fn main() -> Result<()> {
     sodiumoxide::init()
         .map_err(|_| anyhow!("could not initialize libsodium"))?;
 
-    const RCPT_FILE: &str = "recipients.pub";
+    const RCPT_FILE: &str = "ssh_box_keys";
     const KEY_FILE: &str = "~/.ssh/id_ed25519";
 
     let mut opts = Options::new();
@@ -34,25 +37,30 @@ fn main() -> Result<()> {
     opts.optopt("s", "secret", "secret key file", KEY_FILE);
 
     let matches = opts.parse(&args[1..])?;
+
+    let rcpt_file =
+        matches.opt_str("r").unwrap_or_else(|| RCPT_FILE.to_string());
+    let key_file = matches.opt_str("s").unwrap_or_else(|| KEY_FILE.to_string());
+
     if matches.opt_present("h") {
         usage(progname, opts, 0);
     } else if matches.opt_present("c") {
-        let rcpt_file =
-            matches.opt_str("r").unwrap_or_else(|| RCPT_FILE.to_string());
         println!("checking wrt {}", rcpt_file);
     } else if matches.opt_present("d") {
-        let key_file =
-            matches.opt_str("s").unwrap_or_else(|| KEY_FILE.to_string());
         println!("decrypting with {}", key_file);
     } else if matches.opt_present("e") {
-        let rcpt_file =
-            matches.opt_str("r").unwrap_or_else(|| RCPT_FILE.to_string());
         println!("encrypting to {}", rcpt_file);
     } else if matches.opt_present("l") {
         println!("listing recipients");
     } else {
-        usage(progname, opts, 1);
+        //usage(progname, opts, 1);
     }
+
+    let pubkey = b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O4SBvM4uWlCN+Fs8P eg\n";
+    let message = b"example\n";
+    let recipients = sshkey::parse_public_keys(pubkey)?;
+    let encrypted = sshbox::encrypt(&recipients, message)?;
+    print!("{}", std::str::from_utf8(&encrypted)?);
 
     Ok(())
 }
