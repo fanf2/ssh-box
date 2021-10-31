@@ -16,13 +16,12 @@ binary consists of a header followed by the ciphertext.
 The binary file is base64-encoded and delimited by prefix and suffix
 lines. For example,
 
-	-----BEGIN SSH-BOX ENCRYPTED FILE-----
-	c3NoLWJveC12MQAAAAABAAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O
-	4SBvM4uWlCN+Fs8PAAAAAmVnAAAAaKZcNtnpfC0VwHKA2EX/s7zNyuSraWc9xGVmpYJqeKMC
-	Py10Oi9sXUN/Q4Kk9aNvbSXVaXQz76Q94cGT89pPx/lD5QusSNxmc8F1PmaGlakDwinczXT7
-	JDoDtw/CJDXQ7qdnt/OVDnTRDakxZU+eGgRVMeiwAgkzphgDXFN0IXvW
-	-----END SSH-BOX ENCRYPTED FILE-----
-
+    -----BEGIN SSH-BOX ENCRYPTED FILE-----
+    c3NoLWJveC12MQAAAAABAAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O
+    4SBvM4uWlCN+Fs8PAAAAAmVnAAAAaKZcNtnpfC0VwHKA2EX/s7zNyuSraWc9xGVmpYJqeKMC
+    Py10Oi9sXUN/Q4Kk9aNvbSXVaXQz76Q94cGT89pPx/lD5QusSNxmc8F1PmaGlakDwinczXT7
+    JDoDtw/CJDXQ7qdnt/OVDnTRDakxZU+eGgRVMeiwAgkzphgDXFN0IXvW
+    -----END SSH-BOX ENCRYPTED FILE-----
 
 ### header
 
@@ -38,9 +37,9 @@ recipients that can decrypt the file.
 Each recipient has four fields:
 
         string    key type, always "ssh-ed25519"
-		string    ssh public key blob
-		string    human-readable public key comment
-		string    encrypted AEAD nonce and key
+        string    ssh public key blob
+        string    human-readable public key comment
+        string    encrypted AEAD nonce and key
 
 (Each line in an OpenSSH authorized keys or public key file contains
 the key type in ASCII, followed by a base64-encoded blob, followed by
