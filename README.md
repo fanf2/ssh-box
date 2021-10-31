@@ -35,18 +35,22 @@ version number, "ssh-box-v1\0".
 After the version string is a `uint32` that counts the number of
 recipients that can decrypt the file.
 
-Each recipient has four fields:
+Each recipient has three fields:
 
-        string    key type, e.g. "ssh-ed25519"
-        string    ssh public key blob
+        string    ssh public key
         string    human-readable public key comment
         string    encrypted AEAD nonce and key
 
+An SSH public key consists of:
+
+        string    key type
+		... remaining fields depend on the type ...
+
 (Each line in an OpenSSH authorized keys or public key file contains
 the key type in ASCII, followed by a base64-encoded blob, followed by
-the comment. The base64 blob has the same contents as the first two
-recipient fields above. These two fields frequently occur together in
-the SSH protocol.)
+the comment. The decoded base64 blob has the same contents as the
+recipient's ssh public key field. This form of public key occurs
+frequently in the SSH protocol.)
 
 The comment is only used when listing an encrypted file's recipients.
 If the comment consists of a single nul byte then it should be omitted
