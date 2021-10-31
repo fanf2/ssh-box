@@ -47,7 +47,7 @@ pub fn read_secret_key(
 }
 
 pub fn parse_public_keys(ascii: &[u8]) -> Result<Vec<Named<PublicKey>>> {
-    use crate::util::nom::*;
+    use crate::nom::*;
 
     fn ssh_ed25519(armor: &[u8], comment: &str) -> Result<Named<PublicKey>> {
         let binary = base64::decode(armor)?;
@@ -147,7 +147,7 @@ pub fn parse_secret_key(
     ascii: &[u8],
     askpass: AskPass,
 ) -> Result<Named<SecretKey>> {
-    use crate::util::nom::*;
+    use crate::nom::*;
 
     const PREFIX: &[u8] = b"-----BEGIN OPENSSH PRIVATE KEY-----\n";
     const SUFFIX: &[u8] = b"-----END OPENSSH PRIVATE KEY-----\n";

@@ -16,7 +16,7 @@ const MAGIC: &[u8] = b"ssh-box-v1\0";
 type Recipient<'a> = (&'a [u8], &'a [u8], &'a [u8]);
 
 fn parse_message(binary: &[u8]) -> Result<(Vec<Recipient>, &[u8], &[u8])> {
-    use crate::util::nom::*;
+    use crate::nom::*;
 
     let len_tag = |bytes: &'static [u8]| length_value(be_u32, tag(bytes));
     let ssh_string = || length_data(be_u32);
@@ -99,7 +99,7 @@ pub fn encrypt(
 
     for pubkey in recipients {
         let enckey = ed25519::to_curve25519_pk(&pubkey.key)
-            .map_err(|_| anyhow!("could not encrypt to {}", pubkey.name))?;
+            .map_err(|_| anyhow!("could not encrypt using {}", pubkey.name))?;
         let encrypted = sealedbox::seal(&secrets, &enckey);
         binary.add_pubkey(&pubkey.key);
         binary.add_string(pubkey.name.as_bytes());
