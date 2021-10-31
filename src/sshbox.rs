@@ -7,7 +7,7 @@ use std::fmt::Write;
 
 use crate::base64;
 use crate::key;
-use crate::sshkey::*;
+use crate::types::*;
 use crate::util::*;
 
 const PREFIX: &str = "-----BEGIN SSH-BOX ENCRYPTED FILE-----\n";

@@ -8,7 +8,7 @@ mod base64;
 mod key;
 mod nom;
 mod sshbox;
-mod sshkey;
+mod types;
 mod util;
 
 fn usage(progname: &str, opts: Options, status: i32) {

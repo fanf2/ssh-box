@@ -7,7 +7,7 @@ pub use nom::number::complete::*;
 pub use nom::sequence::*;
 
 use crate::base64;
-use crate::key;
+use crate::types::*;
 
 pub const BASE64_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
                                   ABCDEFGHIJKLMNOPQRSTUVWXYZ\
@@ -39,10 +39,8 @@ pub fn be_u32_is<'a>(wanted: u32) -> impl FnMut(&'a [u8]) -> Result<'a, u32> {
     verify(be_u32, move |&found| found == wanted)
 }
 
-pub fn len_tag<'a>(
-    bytes: &'static [u8],
-) -> impl FnMut(&'a [u8]) -> ResultIn<'a> {
-    length_value(be_u32, tag(bytes))
+pub fn len_tag<'a>(word: &'static str) -> impl FnMut(&'a [u8]) -> ResultIn<'a> {
+    length_value(be_u32, is_utf8(tag(word.as_bytes())))
 }
 
 pub fn ssh_string(input: &[u8]) -> ResultIn {
@@ -57,19 +55,19 @@ pub fn ssh_string_ldh(input: &[u8]) -> Result<&str> {
     length_value(be_u32, is_ldh)(input)
 }
 
-pub fn ssh_pubkey_ed25519(input: &[u8]) -> Result<key::Public> {
+pub fn ssh_pubkey_ed25519(input: &[u8]) -> Result<impl PublicKey> {
     map(
-        consumed(preceded(len_tag(b"ssh-ed25519"), ssh_string)),
-        |(all, raw)| key::Public::ed25519_from(all, raw),
+        consumed(pair(len_tag("ssh-ed25519"), ssh_string)),
+        |(blob, (algo, raw))| PublicEd25519::from(algo, blob, raw),
     )(input)
 }
 
-pub fn ssh_pubkey_unknown(input: &[u8]) -> Result<key::Public> {
-    map(consumed(terminated(ssh_string_ldh, rest)), |(all, algo)| {
-        key::Public::unknown_from(all, algo)
+pub fn ssh_pubkey_unknown(input: &[u8]) -> Result<impl PublicKey> {
+    map(consumed(terminated(ssh_string_ldh, rest)), |(blob, algo)| {
+        PublicBad::from(algo, blob, "unsupported algorithm")
     })(input)
 }
 
-pub fn ssh_pubkey(input: &[u8]) -> Result<key::Public> {
+pub fn ssh_pubkey(input: &[u8]) -> Result<impl PublicKey> {
     alt((ssh_pubkey_ed25519, ssh_pubkey_unknown))(input)
 }
