@@ -1,4 +1,6 @@
-use anyhow::Result;
+#![allow(dead_code)]
+
+use anyhow::{anyhow, Result};
 use getopts::Options;
 
 mod askpass;
@@ -15,6 +17,9 @@ fn usage(progname: &str, opts: Options, status: i32) {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let progname = &args[0];
+
+    sodiumoxide::init()
+        .map_err(|_| anyhow!("could not initialize libsodium"))?;
 
     const RCPT_FILE: &str = "recipients.pub";
     const KEY_FILE: &str = "~/.ssh/id_ed25519";
@@ -46,15 +51,8 @@ fn main() -> Result<()> {
     } else if matches.opt_present("l") {
         println!("listing recipients");
     } else {
-        // usage(progname, opts, 1);
+        usage(progname, opts, 1);
     }
-
-    use sshkey::*;
-    sodiumoxide::init();
-
-    let key_file = "id_ed25519.clear";
-    let askpass = askpass::for_file(key_file);
-    print!("{}", read_secret_key(key_file, askpass)?.public_key());
 
     Ok(())
 }

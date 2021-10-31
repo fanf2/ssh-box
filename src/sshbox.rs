@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use sodiumoxide::crypto::aead::xchacha20poly1305_ietf as aead;
 use sodiumoxide::crypto::sealedbox;
 use sodiumoxide::crypto::sign::ed25519;
+use std::fmt::Write;
 
 use crate::sshkey::*;
 use crate::util::*;
@@ -28,25 +29,25 @@ fn parse_message(binary: &[u8]) -> Result<(Vec<Recipient>, &[u8], &[u8])> {
         ),
     ));
 
-    let (ciphertext, (header, recipients)) = parse(&binary[..])
+    let (ciphertext, (header, recipients)) = parse(binary)
         .map_err(|_: NomErr| anyhow!("could not parse message header"))?;
 
     Ok((recipients, header, ciphertext))
 }
 
-pub fn list(message: &[u8]) -> Result<()> {
+pub fn list(message: &[u8]) -> Result<String> {
     let binary = base64::unarmor(message, PREFIX, SUFFIX)?;
-
     let (recipients, _, _) = parse_message(&binary)?;
 
+    let mut list = String::new();
     for (rawkey, comment, _) in recipients {
         let name = String::from_utf8(comment.to_owned())?;
         let key = PublicKey::from_slice(rawkey).ok_or_else(|| {
             anyhow!("invalid ed25519 public key for {}", name)
         })?;
-        println!("{}", Named { key, name });
+        write!(list, "{}", Named { key, name })?;
     }
-    Ok(())
+    Ok(list)
 }
 
 pub fn decrypt(
@@ -128,4 +129,68 @@ pub fn encrypt(
     binary.extend_from_slice(&ciphertext[..]);
 
     Ok(base64::armored(&binary, PREFIX, SUFFIX))
+}
+
+#[cfg(test)]
+mod test {
+
+    const SECRET_ZERO: &[u8] = b"\
+    -----BEGIN OPENSSH PRIVATE KEY-----\n\
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+    QyNTUxOQAAACD88aI+Jay1MEgZlfOGZmMplk9foBQvg0JCvTw4xogNogAAAIi72eREu9nk\n\
+    RAAAAAtzc2gtZWQyNTUxOQAAACD88aI+Jay1MEgZlfOGZmMplk9foBQvg0JCvTw4xogNog\n\
+    AAAEAMtqFIDexbUvh5ZloO2JLNJfMPOB76EKOVNtrh6DaJh/zxoj4lrLUwSBmV84ZmYymW\n\
+    T1+gFC+DQkK9PDjGiA2iAAAABHplcm8B\n\
+    -----END OPENSSH PRIVATE KEY-----\n\
+    ";
+
+    const SECRET_ONE: &[u8] = b"\
+    -----BEGIN OPENSSH PRIVATE KEY-----\n\
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+    QyNTUxOQAAACDGsO9dFysfSxK2D9t7ybYM5kUTnzjaLNcCqqmhvex2XAAAAIgYA8aRGAPG\n\
+    kQAAAAtzc2gtZWQyNTUxOQAAACDGsO9dFysfSxK2D9t7ybYM5kUTnzjaLNcCqqmhvex2XA\n\
+    AAAECqxkaC8YKuyuXcbAl6DMv/Ca5eCshweOQQbfQ6AqVUs8aw710XKx9LErYP23vJtgzm\n\
+    RROfONos1wKqqaG97HZcAAAAA29uZQEC\n\
+    -----END OPENSSH PRIVATE KEY-----\n\
+    ";
+
+    const SECRET_TWO: &[u8] = b"\
+    -----BEGIN OPENSSH PRIVATE KEY-----\n\
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+    QyNTUxOQAAACBUh0x+FydQOmQgZn2J6+FEl81bOba2If+FBl3t8tsWfwAAAIiPPWL/jz1i\n\
+    /wAAAAtzc2gtZWQyNTUxOQAAACBUh0x+FydQOmQgZn2J6+FEl81bOba2If+FBl3t8tsWfw\n\
+    AAAECNNik9+qZ8us+3q/mvTNUH9cDG7uJDZGVwqIgXptpO91SHTH4XJ1A6ZCBmfYnr4USX\n\
+    zVs5trYh/4UGXe3y2xZ/AAAAA3R3bwEC\n\
+    -----END OPENSSH PRIVATE KEY-----\n\
+    ";
+
+    const PUBLIC: &str = "\
+    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMaw710XKx9LErYP23vJtgzmRROfONos1wKqqaG97HZc one\n\
+    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFSHTH4XJ1A6ZCBmfYnr4USXzVs5trYh/4UGXe3y2xZ/ two\n\
+    ";
+
+    const MESSAGE: &[u8] = b"Mr. Watson, come here. I want to see you.";
+
+    #[test]
+    fn test() {
+        use super::*;
+
+        let recipients = parse_public_keys(PUBLIC.as_bytes()).unwrap();
+
+        let encrypted = encrypt(&recipients, MESSAGE).unwrap();
+
+        let list = list(&encrypted).unwrap();
+        assert_eq!(PUBLIC, list);
+
+        let askpass = || Box::new(|| Ok("testing".to_owned()));
+        let sec_zero = parse_secret_key(SECRET_ZERO, askpass()).unwrap();
+        let sec_one = parse_secret_key(SECRET_ONE, askpass()).unwrap();
+        let sec_two = parse_secret_key(SECRET_TWO, askpass()).unwrap();
+        let dec_zero = decrypt(&sec_zero, &encrypted);
+        let dec_one = decrypt(&sec_one, &encrypted).unwrap();
+        let dec_two = decrypt(&sec_two, &encrypted).unwrap();
+        assert!(dec_zero.is_err());
+        assert_eq!(dec_one, MESSAGE);
+        assert_eq!(dec_two, MESSAGE);
+    }
 }
