@@ -23,10 +23,7 @@ fn parse_message(binary: &[u8]) -> Result<(Vec<Recipient>, &[u8], &[u8])> {
 
     let mut parse = consumed(length_count(
         preceded(tag(MAGIC), be_u32),
-        length_value(
-            be_u32,
-            tuple((ssh_ed25519(), ssh_string(), ssh_string())),
-        ),
+        tuple((ssh_ed25519(), ssh_string(), ssh_string())),
     ));
 
     let (ciphertext, (header, recipients)) = parse(binary)
@@ -70,19 +67,12 @@ pub fn decrypt(
     let mut secrets = None;
     for (pubkey, _comment, encrypted) in recipients {
         if pubkey == mykey {
-            use crate::util::nom::*;
             let decrypted = sealedbox::open(encrypted, &de_pubkey, &de_seckey)
                 .map_err(|_| anyhow!("could not decrypt to {}", myname))?;
-            let mut unpack =
-                all_consuming(pair(length_data(be_u32), length_data(be_u32)));
-            let (_, (nonce, key)) =
-                unpack(&decrypted[..]).map_err(|_: NomErr| {
-                    anyhow!("could not unpack aead secrets")
-                })?;
             secrets = Some((
-                aead::Nonce::from_slice(nonce)
+                aead::Nonce::from_slice(&decrypted[0..aead::NONCEBYTES])
                     .ok_or_else(|| anyhow!("invalid nonce"))?,
-                aead::Key::from_slice(key)
+                aead::Key::from_slice(&decrypted[aead::NONCEBYTES..])
                     .ok_or_else(|| anyhow!("invalid aead key"))?,
             ));
         }
@@ -103,26 +93,22 @@ pub fn encrypt(
     let nonce = aead::gen_nonce();
     let key = aead::gen_key();
 
-    let mut secrets = SshBuffer::new();
-    secrets.add_string(nonce.as_ref());
-    secrets.add_string(key.as_ref());
-    let secrets = secrets.as_ref();
+    let mut secrets = Vec::new();
+    secrets.extend_from_slice(nonce.as_ref());
+    secrets.extend_from_slice(key.as_ref());
+    let secrets = &secrets[..];
 
     let mut binary = SshBuffer::new();
     binary.extend_from_slice(MAGIC);
     binary.add_u32(recipients.len() as u32);
 
-    let mut rcpt = SshBuffer::new();
     for pubkey in recipients {
         let enckey = ed25519::to_curve25519_pk(&pubkey.key)
             .map_err(|_| anyhow!("could not encrypt to {}", pubkey.name))?;
         let encrypted = sealedbox::seal(secrets, &enckey);
-
-        rcpt.add_pubkey(&pubkey.key);
-        rcpt.add_string(pubkey.name.as_bytes());
-        rcpt.add_string(&encrypted);
-        binary.add_string(&rcpt);
-        rcpt.clear();
+        binary.add_pubkey(&pubkey.key);
+        binary.add_string(pubkey.name.as_bytes());
+        binary.add_string(&encrypted);
     }
 
     let ciphertext = aead::seal(message, Some(binary.as_ref()), &nonce, &key);
