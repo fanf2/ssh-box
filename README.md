@@ -23,6 +23,7 @@ lines. For example,
     JDoDtw/CJDXQ7qdnt/OVDnTRDakxZU+eGgRVMeiwAgkzphgDXFN0IXvW
     -----END SSH-BOX ENCRYPTED FILE-----
 
+
 ### header
 
 The header is encoded in `ssh` style, using data types from [RFC 4251
@@ -36,7 +37,7 @@ recipients that can decrypt the file.
 
 Each recipient has four fields:
 
-        string    key type, always "ssh-ed25519"
+        string    key type, e.g. "ssh-ed25519"
         string    ssh public key blob
         string    human-readable public key comment
         string    encrypted AEAD nonce and key
@@ -48,17 +49,30 @@ recipient fields above. These two fields frequently occur together in
 the SSH protocol.)
 
 The comment is only used when listing an encrypted file's recipients.
+If the comment consists of a single nul byte then it should be omitted
+from the list.
+
+
+### agility
+
+In the future, this `ssh-box` file format may support other public key
+types, such as `ssh-rsa`. Tools that read `ssh-box` encrypted files
+should not raise an error when they see an unrecognised recipient key
+type.
+
+The bulk encryption algorithm is determined by the version string at
+the start of the file.
 
 
 ### encryption
 
 When encrypting a file, a fresh AEAD nonce and key are generated, and
 concatenated into a secret blob without any framing. (They have fixed
-sizes determined by the AEAD construction, which is also fixed.)
+sizes determined by the AEAD construction.)
 
-Each recipient's ssh public key is [converted][to curve25519] using
-libsodium `crypto_sign_ed25519_pk_to_curve25519()` and the resulting
-key used to encrypt the secret blob using libsodium
+Each recipient's ssh public key is converted using libsodium
+[`crypto_sign_ed25519_pk_to_curve25519()`][to curve25519] and the
+resulting key is used to encrypt the secret blob using libsodium
 [`crypto_box_seal()`][sealed box].
 
 
@@ -67,11 +81,11 @@ key used to encrypt the secret blob using libsodium
 When decrypting a file, the header is searched for a recipient whose
 key type and public key blob match the user's ssh key.
 
-The user's ssh key pair is [converted][to curve25519] using libsodium
-`crypto_sign_ed25519_pk_to_curve25519()` and
-`crypto_sign_ed25519_sk_to_curve25519()`, and the resulting key pair
-used to decrypt the AEAD secret blob using libsodium
-[`crypto_box_seal_open()`][sealed box].
+The user's ssh key pair is converted using libsodium
+[`crypto_sign_ed25519_pk_to_curve25519()` and
+`crypto_sign_ed25519_sk_to_curve25519()`][to curve25519], and the
+resulting key pair is used to decrypt the AEAD secret blob using
+libsodium [`crypto_box_seal_open()`][sealed box].
 
 
 ### ciphertext
@@ -85,12 +99,6 @@ additional data.
 [to curve25519]: https://libsodium.gitbook.io/doc/advanced/ed25519-curve25519
 [sealed box]: https://libsodium.gitbook.io/doc/public-key_cryptography/sealed_boxes
 [XChaCha20-Poly1305]: https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction
-
-
-todo
-----
-
-  * RSA support
 
 
 licence
