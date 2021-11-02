@@ -1,18 +1,18 @@
 use crate::prelude::*;
 
-pub fn encode(binary: &[u8]) -> String {
+pub fn base64_encode(binary: &[u8]) -> String {
     use sodiumoxide::base64::Variant::*;
     sodiumoxide::base64::encode(binary, Original)
 }
 
-pub fn decode(ascii: &[u8]) -> Result<Vec<u8>> {
+pub fn base64_decode(ascii: &[u8]) -> Result<Vec<u8>> {
     use sodiumoxide::base64::Variant::*;
     sodiumoxide::base64::decode(ascii, Original)
         .map_err(|_| anyhow!("could not decode base64"))
 }
 
-pub fn armored(binary: &[u8], prefix: &str, suffix: &str) -> String {
-    let oneline = encode(binary);
+pub fn ascii_armored(binary: &[u8], prefix: &str, suffix: &str) -> String {
+    let oneline = base64_encode(binary);
     let oneline = oneline.as_bytes();
     let mut ascii = String::new();
     ascii.push_str(prefix);
@@ -30,7 +30,11 @@ pub fn armored(binary: &[u8], prefix: &str, suffix: &str) -> String {
     ascii
 }
 
-pub fn unarmor(ascii: &[u8], prefix: &str, suffix: &str) -> Result<Vec<u8>> {
+pub fn ascii_unarmor(
+    ascii: &[u8],
+    prefix: &str,
+    suffix: &str,
+) -> Result<Vec<u8>> {
     use crate::nom::*;
 
     let mut unarmor = delimited(
@@ -41,5 +45,5 @@ pub fn unarmor(ascii: &[u8], prefix: &str, suffix: &str) -> Result<Vec<u8>> {
     let (_, base64_lines) = unarmor(ascii)
         .map_err(|_: NomErr| anyhow!("could not remove ascii armor"))?;
 
-    decode(&base64_lines.concat())
+    base64_decode(&base64_lines.concat())
 }

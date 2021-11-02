@@ -60,7 +60,7 @@ pub fn is_ldh(input: &[u8]) -> Result<&str> {
 }
 
 pub fn is_base64(input: &[u8]) -> Result<Vec<u8>> {
-    map_res(is_a(BASE64_CHARS), base64::decode)(input)
+    map_res(is_a(BASE64_CHARS), base64_decode)(input)
 }
 
 pub fn be_u32_is<'a>(wanted: u32) -> impl FnMut(&'a [u8]) -> Result<'a, u32> {

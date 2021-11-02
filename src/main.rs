@@ -1,10 +1,11 @@
 use crate::prelude::*;
 use getopts::Options;
 
-pub mod base64;
-pub mod nom;
-pub mod prelude;
-pub mod pubkey;
+mod askpass;
+mod base64;
+mod nom;
+mod prelude;
+mod pubkey;
 
 fn usage(progname: &str, opts: Options, status: i32) {
     let brief =

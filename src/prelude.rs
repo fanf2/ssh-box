@@ -4,5 +4,5 @@ pub use sodiumoxide::crypto::sealedbox;
 pub use sodiumoxide::crypto::sign as ed25519;
 //pub use sodiumoxide::utils::memzero;
 
-pub use crate::base64;
+pub use crate::base64::*;
 pub use crate::pubkey::*;

@@ -34,7 +34,7 @@ impl PartialEq for PublicKey {
 
 impl std::fmt::Binary for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let blob = base64::encode(&self.blob);
+        let blob = base64_encode(&self.blob);
         if self.name.is_empty() {
             writeln!(f, "{} {}", self.algo, blob)
         } else {
