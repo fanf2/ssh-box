@@ -84,9 +84,9 @@ impl PublicKey {
 
 fn encrypt_ed25519(sshkey: &[u8], secrets: &[u8]) -> Result<Vec<u8>> {
     use crate::nom::*;
-    let mut unpack = delimited(ssh_string_tag("ssh-ed25519"), ssh_string, eof);
     let (_, rawkey) =
-        unpack(sshkey).map_err(|_: NomErr| anyhow!("could not unpack key"))?;
+        delimited(ssh_string_tag("ssh-ed25519"), ssh_string, eof)(sshkey)
+            .map_err(|_: NomErr| anyhow!("could not unpack key"))?;
     let ed25519 = ed25519::PublicKey::from_slice(rawkey)
         .ok_or_else(|| anyhow!("incorrect key length"))?;
     let curve25519 = ed25519::to_curve25519_pk(&ed25519)

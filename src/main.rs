@@ -6,6 +6,7 @@ mod base64;
 mod nom;
 mod prelude;
 mod pubkey;
+mod seckey;
 
 fn usage(progname: &str, opts: Options, status: i32) {
     let brief =
