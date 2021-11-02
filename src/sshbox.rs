@@ -34,7 +34,7 @@ pub fn list(message: &[u8]) -> Result<String> {
     Ok(list)
 }
 
-pub fn decrypt(seckey: &dyn SecretKey, message: &[u8]) -> Result<Vec<u8>> {
+pub fn decrypt(seckey: impl SecretKey, message: &[u8]) -> Result<Vec<u8>> {
     let pubkey = seckey.pubkey();
     let binary = ascii_unarmor(message, PREFIX, SUFFIX)?;
     let (recipients, header, ciphertext) = parse_message(&binary)?;
@@ -160,11 +160,13 @@ mod test {
         let sec_zero = parse_secret_key(SECRET_ZERO, askpass()).unwrap();
         let sec_one = parse_secret_key(SECRET_ONE, askpass()).unwrap();
         let sec_two = parse_secret_key(SECRET_TWO, askpass()).unwrap();
-        let dec_zero = sec_zero.decrypt(&encrypted);
-        let dec_one = sec_one.decrypt(&encrypted).unwrap();
-        let dec_two = sec_two.decrypt(&encrypted).unwrap();
+        let dec_zero = decrypt(&sec_zero, &encrypted);
+        let dec_one = decrypt(&sec_one, &encrypted).unwrap();
+        let dec_two = decrypt(&sec_two, &encrypted).unwrap();
         assert!(dec_zero.is_err());
         assert_eq!(dec_one, MESSAGE);
         assert_eq!(dec_two, MESSAGE);
+        assert_eq!(sec_one.pubkey(), &recipients[0]);
+        assert_eq!(sec_two.pubkey(), &recipients[1]);
     }
 }

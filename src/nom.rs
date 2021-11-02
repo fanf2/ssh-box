@@ -25,14 +25,14 @@ type ResultIn<'a> = Result<'a, &'a [u8]>;
 
 fn commentary(input: &[u8]) -> Result<usize> {
     many0_count(tuple((
-        line_ending,
         space0,
         opt(pair(tag(b"#"), not_line_ending)),
+        line_ending,
     )))(input)
 }
 
 fn commented_newline(input: &[u8]) -> Result<usize> {
-    terminated(commentary, line_ending)(input)
+    preceded(line_ending, commentary)(input)
 }
 
 pub fn commented_lines<'a, P, O>(
@@ -42,9 +42,9 @@ where
     P: FnMut(&'a [u8]) -> Result<'a, O>,
 {
     delimited(
-        opt(commented_newline),
-        separated_list1(commented_newline, parse_line),
-        terminated(commentary, eof),
+        commentary,
+        many1(terminated(parse_line, pair(line_ending, commentary))),
+        eof,
     )
 }
 

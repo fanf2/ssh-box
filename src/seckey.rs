@@ -5,6 +5,15 @@ pub trait SecretKey {
     fn decrypt(&self, message: &[u8]) -> Result<Vec<u8>>;
 }
 
+impl SecretKey for &Box<dyn SecretKey> {
+    fn pubkey(&self) -> &PublicKey {
+        (&***self).pubkey()
+    }
+    fn decrypt(&self, message: &[u8]) -> Result<Vec<u8>> {
+        (&***self).decrypt(message)
+    }
+}
+
 pub fn read_secret_key(
     key_file: &str,
     askpass: AskPass,
@@ -137,7 +146,7 @@ impl SecretEd25519 {
         let raw_pub = parts[0];
         let raw_sec = parts[1];
 
-        pubkey.name = String::from_utf8(parts[3].to_owned())?;
+        pubkey.name = String::from_utf8(parts[2].to_owned())?;
 
         let ed_sec = ed25519::SecretKey::from_slice(raw_sec)
             .ok_or_else(|| anyhow!("invalid ed25519 secret key"))?;
