@@ -25,12 +25,13 @@ fn main() -> Result<()> {
         .map_err(|_| anyhow!("could not initialize libsodium"))?;
 
     const RCPT_FILE: &str = "ssh_box_keys";
-    const KEY_FILE: &str = "~/.ssh/id_ed25519";
+    const KEY_FILE: &str = "~/.ssh/box_ed25519";
 
     let mut opts = Options::new();
     opts.optflag("c", "check", "check encrypted file's recipient list");
     opts.optflag("d", "decrypt", "decrypt a file using your secret key");
     opts.optflag("e", "encrypt", "encrypt a file to a list of recipients");
+    opts.optflag("k", "keygen", "generate an ssh-box key pair");
     opts.optflag("h", "help", "print this help menu");
     opts.optflag("l", "list", "list an encrypted file's recipients");
     opts.optopt("r", "recipients", "recipient public key list", RCPT_FILE);
@@ -52,6 +53,8 @@ fn main() -> Result<()> {
         println!("encrypting to {}", rcpt_file);
     } else if matches.opt_present("l") {
         println!("listing recipients");
+    } else if matches.opt_present("k") {
+        return keygen(key_file);
     } else {
         //usage(progname, opts, 1);
     }
@@ -66,4 +69,20 @@ ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDJmjUTr9pyZJEzs/iS48mZZEofOQBCu27VKL/mlu38
     print!("{}", encrypted);
 
     Ok(())
+}
+
+fn keygen(mut file: String) -> Result<()> {
+    use std::process::Command;
+
+    let home = std::env::var("HOME")?;
+    let user = std::env::var("USER")?;
+    let comment = format!("{} (ssh-box)", user);
+
+    if file.starts_with("~/") {
+        file = file.replacen("~", &home, 1);
+    }
+    let status = Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-f", &file, "-C", &comment])
+        .status()?;
+    std::process::exit(status.code().unwrap_or(1));
 }
