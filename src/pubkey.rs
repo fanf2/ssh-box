@@ -7,6 +7,12 @@ pub struct PublicKey {
     pub name: String,
 }
 
+impl PartialEq for PublicKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.blob == other.blob
+    }
+}
+
 // for nom::ssh_pubkey()
 impl From<(&[u8], &str)> for PublicKey {
     fn from((blob, algo): (&[u8], &str)) -> PublicKey {
@@ -31,12 +37,6 @@ impl From<(&str, Vec<u8>, &str)> for PublicKey {
         let algo = algo.to_owned();
         let name = name.to_owned();
         PublicKey { algo, blob, name }
-    }
-}
-
-impl PartialEq for PublicKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.blob == other.blob
     }
 }
 

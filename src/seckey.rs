@@ -1,10 +1,18 @@
 use crate::prelude::*;
 
+#[derive(Clone, Debug, Eq)]
 pub struct SecretKey {
     pub pubkey: PublicKey,
     parts: SecretParts,
 }
 
+impl PartialEq for SecretKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.parts == other.parts
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum SecretParts {
     Ed25519(curve25519::PublicKey, curve25519::SecretKey),
     RsaOaep(Box<RsaPrivateKey>),
@@ -127,12 +135,20 @@ fn bcrypt_aes_decrypt(
 const ED25519_PARTS: usize = 3;
 
 fn new_ed25519(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
+    use crate::nom::*;
     assert!(parts.len() == ED25519_PARTS);
 
     let raw_pub = parts[0];
     let raw_sec = parts[1];
 
     pubkey.name = String::from_utf8(parts[2].to_owned())?;
+
+    tuple((
+        ssh_string_tag("ssh-ed25519"),
+        length_value(be_u32, tag(raw_pub)),
+        eof,
+    ))(&pubkey.blob)
+    .map_err(|_: NomErr| anyhow!("inconsistent private key"))?;
 
     let ed_sec = ed25519::SecretKey::from_slice(raw_sec)
         .ok_or_else(|| anyhow!("invalid ed25519 secret key"))?;
@@ -141,15 +157,6 @@ fn new_ed25519(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
     if raw_pub != ed_pub.as_ref() {
         return Err(anyhow!("inconsistent private key"));
     }
-
-    use crate::nom::*;
-    tuple((
-        ssh_string_tag("ssh-ed25519"),
-        be_u32_is(raw_pub.len() as u32),
-        tag(raw_pub),
-        eof,
-    ))(&pubkey.blob)
-    .map_err(|_: NomErr| anyhow!("inconsistent private key"))?;
 
     let cannot = |_| anyhow!("cannot decrypt with this private key");
     let curve_pub = ed25519::to_curve25519_pk(&ed_pub).map_err(cannot)?;
@@ -163,6 +170,7 @@ const RSA_OAEP_PARTS: usize = 7;
 
 #[allow(clippy::many_single_char_names)]
 fn new_rsa_oaep(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
+    use crate::nom::*;
     assert!(parts.len() == RSA_OAEP_PARTS);
 
     let n = BigUint::from_bytes_be(parts[0]);
@@ -174,10 +182,71 @@ fn new_rsa_oaep(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
 
     pubkey.name = String::from_utf8(parts[6].to_owned())?;
 
+    tuple((
+        ssh_string_tag("ssh-rsa"),
+        length_value(be_u32, tag(parts[1])),
+        length_value(be_u32, tag(parts[0])),
+        eof,
+    ))(&pubkey.blob)
+    .map_err(|_: NomErr| anyhow!("inconsistent private key"))?;
+
     let key = RsaPrivateKey::from_components(n, e, d, vec![p, q]);
     key.validate()?;
     // box it up because it is big
     let parts = SecretParts::RsaOaep(Box::new(key));
 
     Ok(SecretKey { pubkey, parts })
+}
+
+#[cfg(test)]
+mod test {
+
+    const SECRET_NONE: &[u8] = b"\
+    -----BEGIN OPENSSH PRIVATE KEY-----\n\
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+    QyNTUxOQAAACDCP67FyNO6h3/nvVM9Jn3lEb0+q3W+oNpplDSp0077tQAAAJB0TYerdE2H\n\
+    qwAAAAtzc2gtZWQyNTUxOQAAACDCP67FyNO6h3/nvVM9Jn3lEb0+q3W+oNpplDSp0077tQ\n\
+    AAAEBDwWHy+pCf/WKlyhwwHFymEl2/lxVF0PIPyIP7nzLK08I/rsXI07qHf+e9Uz0mfeUR\n\
+    vT6rdb6g2mmUNKnTTvu1AAAAB3Rlc3RpbmcBAgMEBQY=\n\
+    -----END OPENSSH PRIVATE KEY-----\n\
+    ";
+
+    const SECRET_BCRYPT: &[u8] = b"\
+    -----BEGIN OPENSSH PRIVATE KEY-----\n\
+    b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAFaUJX8M\n\
+    Pwuw/dD36vf2AcAAAAEAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIMI/rsXI07qHf+e9\n\
+    Uz0mfeURvT6rdb6g2mmUNKnTTvu1AAAAkOuSWLhj5JqnarRMioKy73Il5YWCsHO1BvDPpl\n\
+    tahgUYIbTHhzTuZrNwliprVzaDss/9DFESP36tZF26USuZhXyJGWaQ1MD14Nqokv6f+eB8\n\
+    +eTEVP57kHKZNXOerYL7t4DHJgMNJ+kjjpdMIyLadw2XP7SnIEG0P1m09/774JkcscIiKu\n\
+    78Hg/SQXI9ZaYuBg==\n\
+    -----END OPENSSH PRIVATE KEY-----\n\
+    ";
+
+    const PUBLIC: &str = "\
+    ssh-ed25519 \
+    AAAAC3NzaC1lZDI1NTE5AAAAIMI/rsXI07qHf+e9Uz0mfeURvT6rdb6g2mmUNKnTTvu1 \
+    testing\n\
+    ";
+
+    #[test]
+    fn test() {
+        use super::*;
+
+        let askpass = || Box::new(|| Ok("testing".to_owned()));
+
+        let sec_none = parse_secret_key(SECRET_NONE, askpass()).unwrap();
+        let sec_bcrypt = parse_secret_key(SECRET_BCRYPT, askpass()).unwrap();
+        assert_eq!(sec_none, sec_bcrypt);
+
+        let seckey = sec_none.clone();
+
+        let pub_none = format!("{:b}", sec_none.pubkey);
+        let pub_bcrypt = format!("{:b}", sec_bcrypt.pubkey);
+        assert_eq!(pub_none, PUBLIC);
+        assert_eq!(pub_bcrypt, PUBLIC);
+
+        let pubkey = parse_public_keys(PUBLIC.as_bytes()).unwrap();
+        assert!(pubkey.len() == 1);
+        assert_eq!(pubkey[0], seckey.pubkey);
+    }
 }
