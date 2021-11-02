@@ -23,6 +23,31 @@ type Result<'a, O> = nom::IResult<&'a [u8], O, NomError<'a>>;
 
 type ResultIn<'a> = Result<'a, &'a [u8]>;
 
+fn commentary(input: &[u8]) -> Result<usize> {
+    many0_count(tuple((
+        line_ending,
+        space0,
+        opt(pair(tag(b"#"), not_line_ending)),
+    )))(input)
+}
+
+fn commented_newline(input: &[u8]) -> Result<usize> {
+    terminated(commentary, line_ending)(input)
+}
+
+pub fn commented_lines<'a, P, O>(
+    parse_line: P,
+) -> impl FnMut(&'a [u8]) -> Result<'a, Vec<O>>
+where
+    P: FnMut(&'a [u8]) -> Result<'a, O>,
+{
+    delimited(
+        opt(commented_newline),
+        separated_list1(commented_newline, parse_line),
+        terminated(commentary, eof),
+    )
+}
+
 pub fn is_utf8<'a, P>(parser: P) -> impl FnMut(&'a [u8]) -> Result<'a, &'a str>
 where
     P: FnMut(&'a [u8]) -> ResultIn<'a>,
