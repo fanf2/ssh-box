@@ -34,15 +34,14 @@ pub fn list(message: &[u8]) -> Result<String> {
     Ok(list)
 }
 
-pub fn decrypt(seckey: impl SecretKey, message: &[u8]) -> Result<Vec<u8>> {
-    let pubkey = seckey.pubkey();
+pub fn decrypt(seckey: &SecretKey, message: &[u8]) -> Result<Vec<u8>> {
     let binary = ascii_unarmor(message, PREFIX, SUFFIX)?;
     let (recipients, header, ciphertext) = parse_message(&binary)?;
 
     let (_, encrypted) = recipients
         .iter()
-        .find(|(rcptkey, _)| rcptkey == pubkey)
-        .ok_or_else(|| anyhow!("no recipient matches {}", pubkey))?;
+        .find(|(pubkey, _)| pubkey == &seckey.pubkey)
+        .ok_or_else(|| anyhow!("no recipient matches {}", &seckey.pubkey))?;
 
     let secrets = seckey.decrypt(encrypted)?;
 
@@ -166,7 +165,7 @@ mod test {
         assert!(dec_zero.is_err());
         assert_eq!(dec_one, MESSAGE);
         assert_eq!(dec_two, MESSAGE);
-        assert_eq!(sec_one.pubkey(), &recipients[0]);
-        assert_eq!(sec_two.pubkey(), &recipients[1]);
+        assert_eq!(sec_one.pubkey, recipients[0]);
+        assert_eq!(sec_two.pubkey, recipients[1]);
     }
 }

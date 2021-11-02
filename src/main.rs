@@ -56,12 +56,14 @@ fn main() -> Result<()> {
         //usage(progname, opts, 1);
     }
 
-    let pubkey = b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O4SBvM4uWlCN+Fs8P eg\n";
+    let pubkeys = b"\
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O4SBvM4uWlCN+Fs8P ed\n\
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDJmjUTr9pyZJEzs/iS48mZZEofOQBCu27VKL/mlu38+KJ3aeR7dCiQbrF97+k8+S82g64zHxxs4gwFwLmQrym6/WmrCxI1VPzWDQvSZ6u8jQN0m/N+uatXTV3jqjaFeVFGwdR6+4SFmPTFqLpv4JrgMlnjq0Rw2s8JAA7h0Dyq4YDBoTd7/37fCY9KJfju54G7mDKszm8MvDb/f/7xXDkQkKmb46PB9+T4q/j0iWMGqV9PCot3YwiIIp8iM+ZUh/jdj+0bxP3WJOfkhBQf7msuE2yKjzoWZMHPtJ2v5dusaqS5t6GCgA2QloP2ebYDSBh2ugUZzstwhLIdc9jIvOGayyXKyDDblqf2xKx0Pm0RNc+7STmYI0pXuvBycknHlBq4JzZQD5M39r/x+tJC5/WeePbaILB32di3EKwEAGOwXbC4zOb+7p3kPAFOkZRfXkG70T4sLmlZD3Vhb0ac5UABc2a/XTYb4gjK4jy2mn3qSC4gvx0rqcks50XmV0rRoQM= rsa\n\
+";
     let message = b"example\n";
-    let recipients = parse_public_keys(pubkey)?;
-    // dbg!(recipients);
-    //let encrypted = sshbox::encrypt(&recipients, message)?;
-    print!("{:b}", recipients[0]);
+    let recipients = parse_public_keys(pubkeys)?;
+    let encrypted = sshbox::encrypt(&recipients, message)?;
+    print!("{}", encrypted);
 
     Ok(())
 }

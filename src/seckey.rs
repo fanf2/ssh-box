@@ -1,23 +1,31 @@
 use crate::prelude::*;
 
-pub trait SecretKey {
-    fn pubkey(&self) -> &PublicKey;
-    fn decrypt(&self, message: &[u8]) -> Result<Vec<u8>>;
+pub struct SecretKey {
+    pub pubkey: PublicKey,
+    parts: SecretParts,
 }
 
-impl SecretKey for &Box<dyn SecretKey> {
-    fn pubkey(&self) -> &PublicKey {
-        (&***self).pubkey()
-    }
-    fn decrypt(&self, message: &[u8]) -> Result<Vec<u8>> {
-        (&***self).decrypt(message)
+enum SecretParts {
+    Ed25519(curve25519::PublicKey, curve25519::SecretKey),
+    RsaOaep(Box<RsaPrivateKey>),
+}
+
+impl SecretKey {
+    pub fn decrypt(&self, message: &[u8]) -> Result<Vec<u8>> {
+        let failed = || anyhow!("could not decrypt with {}", self.pubkey);
+        match &self.parts {
+            SecretParts::Ed25519(pubkey, seckey) => {
+                sealedbox::open(message, pubkey, seckey).map_err(|_| failed())
+            }
+            SecretParts::RsaOaep(key) => {
+                let padding = PaddingScheme::new_oaep::<sha2::Sha256>();
+                key.decrypt(padding, message).map_err(|_| failed())
+            }
+        }
     }
 }
 
-pub fn read_secret_key(
-    key_file: &str,
-    askpass: AskPass,
-) -> Result<Box<dyn SecretKey>> {
+pub fn read_secret_key(key_file: &str, askpass: AskPass) -> Result<SecretKey> {
     let context = || format!("reading {}", key_file);
     let ascii = std::fs::read(key_file).with_context(context)?;
     parse_secret_key(&ascii, askpass).with_context(context)
@@ -25,10 +33,7 @@ pub fn read_secret_key(
 
 // See https://dnaeon.github.io/openssh-private-key-binary-format/
 
-pub fn parse_secret_key(
-    ascii: &[u8],
-    askpass: AskPass,
-) -> Result<Box<dyn SecretKey>> {
+pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
     use crate::nom::*;
 
     let binary = ascii_unarmor(
@@ -65,10 +70,14 @@ pub fn parse_secret_key(
         return Err(anyhow!("bad alignment in private key"));
     }
 
-    let (algo, builder, part_count) = match pubkey.algo.as_str() {
-        "ssh-ed25519" => ("ssh-ed25519", SecretEd25519::build, ED25519_PARTS),
-        _ => return Err(anyhow!("unsupported algoritm")),
-    };
+    type Builder = fn(PublicKey, Vec<&[u8]>) -> Result<SecretKey>;
+
+    let (algo, builder, part_count): (&str, Builder, usize) =
+        match pubkey.algo.as_str() {
+            "ssh-ed25519" => ("ssh-ed25519", new_ed25519, ED25519_PARTS),
+            "ssh-rsa" => ("ssh-rsa", new_rsa_oaep, RSA_OAEP_PARTS),
+            _ => return Err(anyhow!("unsupported algoritm")),
+        };
 
     let split_parts =
         preceded(ssh_string_tag(algo), count(ssh_string, part_count));
@@ -115,59 +124,60 @@ fn bcrypt_aes_decrypt(
     Ok(())
 }
 
-struct SecretEd25519 {
-    pubkey: PublicKey,
-    curve_pub: curve25519::PublicKey,
-    curve_sec: curve25519::SecretKey,
-}
-
-impl SecretKey for SecretEd25519 {
-    fn pubkey(&self) -> &PublicKey {
-        &self.pubkey
-    }
-
-    fn decrypt(&self, message: &[u8]) -> Result<Vec<u8>> {
-        sealedbox::open(message, &self.curve_pub, &self.curve_sec)
-            .map_err(|_| anyhow!("could not decrypt with {}", self.pubkey))
-    }
-}
-
 const ED25519_PARTS: usize = 3;
 
-impl SecretEd25519 {
-    fn build(
-        mut pubkey: PublicKey,
-        parts: Vec<&[u8]>,
-    ) -> Result<Box<dyn SecretKey>> {
-        use crate::nom::*;
+fn new_ed25519(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
+    assert!(parts.len() == ED25519_PARTS);
 
-        assert!(parts.len() == ED25519_PARTS);
+    let raw_pub = parts[0];
+    let raw_sec = parts[1];
 
-        let raw_pub = parts[0];
-        let raw_sec = parts[1];
+    pubkey.name = String::from_utf8(parts[2].to_owned())?;
 
-        pubkey.name = String::from_utf8(parts[2].to_owned())?;
+    let ed_sec = ed25519::SecretKey::from_slice(raw_sec)
+        .ok_or_else(|| anyhow!("invalid ed25519 secret key"))?;
+    let ed_pub = ed_sec.public_key();
 
-        let ed_sec = ed25519::SecretKey::from_slice(raw_sec)
-            .ok_or_else(|| anyhow!("invalid ed25519 secret key"))?;
-        let ed_pub = ed_sec.public_key();
-
-        if raw_pub != ed_pub.as_ref() {
-            return Err(anyhow!("inconsistent private key"));
-        }
-
-        tuple((
-            ssh_string_tag("ssh-ed25519"),
-            be_u32_is(raw_pub.len() as u32),
-            tag(raw_pub),
-            eof,
-        ))(&pubkey.blob)
-        .map_err(|_: NomErr| anyhow!("inconsistent private key"))?;
-
-        let cannot = |_| anyhow!("cannot decrypt with this private key");
-        let curve_pub = ed25519::to_curve25519_pk(&ed_pub).map_err(cannot)?;
-        let curve_sec = ed25519::to_curve25519_sk(&ed_sec).map_err(cannot)?;
-
-        Ok(Box::new(SecretEd25519 { pubkey, curve_pub, curve_sec }))
+    if raw_pub != ed_pub.as_ref() {
+        return Err(anyhow!("inconsistent private key"));
     }
+
+    use crate::nom::*;
+    tuple((
+        ssh_string_tag("ssh-ed25519"),
+        be_u32_is(raw_pub.len() as u32),
+        tag(raw_pub),
+        eof,
+    ))(&pubkey.blob)
+    .map_err(|_: NomErr| anyhow!("inconsistent private key"))?;
+
+    let cannot = |_| anyhow!("cannot decrypt with this private key");
+    let curve_pub = ed25519::to_curve25519_pk(&ed_pub).map_err(cannot)?;
+    let curve_sec = ed25519::to_curve25519_sk(&ed_sec).map_err(cannot)?;
+    let parts = SecretParts::Ed25519(curve_pub, curve_sec);
+
+    Ok(SecretKey { pubkey, parts })
+}
+
+const RSA_OAEP_PARTS: usize = 7;
+
+#[allow(clippy::many_single_char_names)]
+fn new_rsa_oaep(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
+    assert!(parts.len() == RSA_OAEP_PARTS);
+
+    let n = BigUint::from_bytes_be(parts[0]);
+    let e = BigUint::from_bytes_be(parts[1]);
+    let d = BigUint::from_bytes_be(parts[2]);
+    // skip iqmp
+    let p = BigUint::from_bytes_be(parts[4]);
+    let q = BigUint::from_bytes_be(parts[5]);
+
+    pubkey.name = String::from_utf8(parts[6].to_owned())?;
+
+    let key = RsaPrivateKey::from_components(n, e, d, vec![p, q]);
+    key.validate()?;
+    // box it up because it is big
+    let parts = SecretParts::RsaOaep(Box::new(key));
+
+    Ok(SecretKey { pubkey, parts })
 }

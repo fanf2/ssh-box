@@ -84,6 +84,7 @@ impl PublicKey {
     pub fn encrypt(&self, secrets: &[u8]) -> Result<Vec<u8>> {
         match self.algo.as_str() {
             "ssh-ed25519" => encrypt_ed25519(&self.blob, secrets),
+            "ssh-rsa" => encrypt_rsa_oaep(&self.blob, secrets),
             _ => Err(anyhow!("unsupported algoritm")),
         }
         .with_context(|| format!("{}", self))
@@ -100,4 +101,20 @@ fn encrypt_ed25519(sshkey: &[u8], secrets: &[u8]) -> Result<Vec<u8>> {
     let curve25519 = ed25519::to_curve25519_pk(&ed25519)
         .map_err(|_| anyhow!("could not convert key"))?;
     Ok(sealedbox::seal(secrets, &curve25519))
+}
+
+fn encrypt_rsa_oaep(sshkey: &[u8], secrets: &[u8]) -> Result<Vec<u8>> {
+    use crate::nom::*;
+    let (_, (raw_e, raw_n)) = delimited(
+        ssh_string_tag("ssh-rsa"),
+        pair(ssh_string, ssh_string),
+        eof,
+    )(sshkey)
+    .map_err(|_: NomErr| anyhow!("could not unpack key"))?;
+    let n = BigUint::from_bytes_be(raw_n);
+    let e = BigUint::from_bytes_be(raw_e);
+    let pubkey = RsaPublicKey::new(n, e)?;
+    let padding = PaddingScheme::new_oaep::<sha2::Sha256>();
+    let mut rng = rand::rngs::OsRng;
+    Ok(pubkey.encrypt(&mut rng, padding, secrets)?)
 }

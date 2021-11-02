@@ -1,4 +1,6 @@
 pub use anyhow::{anyhow, Context, Result};
+pub use rsa::PublicKey as _;
+pub use rsa::{BigUint, PaddingScheme, RsaPrivateKey, RsaPublicKey};
 pub use sodiumoxide::crypto::aead::xchacha20poly1305_ietf as aead;
 pub use sodiumoxide::crypto::box_ as curve25519;
 pub use sodiumoxide::crypto::sealedbox;
