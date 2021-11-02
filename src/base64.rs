@@ -13,18 +13,11 @@ pub fn base64_decode(ascii: &[u8]) -> Result<Vec<u8>> {
 
 pub fn ascii_armored(binary: &[u8], prefix: &str, suffix: &str) -> String {
     let oneline = base64_encode(binary);
-    let oneline = oneline.as_bytes();
     let mut ascii = String::new();
     ascii.push_str(prefix);
-    const LINE_LEN: usize = 64;
-    let end = oneline.len();
-    let mut i = 0;
-    while i < end {
-        let j = i + LINE_LEN;
-        let hunk = if j < end { &oneline[i..j] } else { &oneline[i..] };
-        ascii.push_str(std::str::from_utf8(hunk).unwrap());
+    for line in oneline.as_bytes().chunks(64) {
+        ascii.push_str(std::str::from_utf8(line).unwrap());
         ascii.push('\n');
-        i = j;
     }
     ascii.push_str(suffix);
     ascii
