@@ -1,7 +1,7 @@
 use crate::prelude::*;
 
 pub trait SecretKey {
-    fn public(&self) -> &PublicKey;
+    fn pubkey(&self) -> &PublicKey;
     fn decrypt(&self, message: &[u8]) -> Result<Vec<u8>>;
 }
 
@@ -59,7 +59,7 @@ pub fn parse_secret_key(
     }
 
     let (algo, builder, part_count) = match pubkey.algo.as_str() {
-        "ssh-ed25519" => ("ssh-ed25519", SecretEd25519::new, 3),
+        "ssh-ed25519" => ("ssh-ed25519", SecretEd25519::new, ED25519_PARTS),
         _ => return Err(anyhow!("unsupported algoritm")),
     };
 
@@ -109,13 +109,58 @@ fn bcrypt_aes_decrypt(
 }
 
 struct SecretEd25519 {
-    public: PublicKey,
+    pubkey: PublicKey,
     curve_pub: curve25519::PublicKey,
     curve_sec: curve25519::SecretKey,
 }
 
+impl SecretKey for SecretEd25519 {
+    fn pubkey(&self) -> &PublicKey {
+        &self.pubkey
+    }
+
+    fn decrypt(&self, message: &[u8]) -> Result<Vec<u8>> {
+        sealedbox::open(message, &self.curve_pub, &self.curve_sec)
+            .map_err(|_| anyhow!("could not decrypt with {}", self.pubkey))
+    }
+}
+
+const ED25519_PARTS: usize = 3;
+
 impl SecretEd25519 {
-    fn new(pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<Box<dyn SecretKey>> {
-        unimplemented!()
+    fn new(
+        mut pubkey: PublicKey,
+        parts: Vec<&[u8]>,
+    ) -> Result<Box<dyn SecretKey>> {
+        use crate::nom::*;
+
+        assert!(parts.len() == ED25519_PARTS);
+
+        let raw_pub = parts[0];
+        let raw_sec = parts[1];
+
+        pubkey.name = String::from_utf8(parts[3].to_owned())?;
+
+        let ed_sec = ed25519::SecretKey::from_slice(raw_sec)
+            .ok_or_else(|| anyhow!("invalid ed25519 secret key"))?;
+        let ed_pub = ed_sec.public_key();
+
+        if raw_pub != ed_pub.as_ref() {
+            return Err(anyhow!("inconsistent private key"));
+        }
+
+        tuple((
+            ssh_string_tag("ssh-ed25519"),
+            be_u32_is(raw_pub.len() as u32),
+            tag(raw_pub),
+            eof,
+        ))(&pubkey.blob)
+        .map_err(|_: NomErr| anyhow!("inconsistent private key"))?;
+
+        let cannot = |_| anyhow!("cannot decrypt with this private key");
+        let curve_pub = ed25519::to_curve25519_pk(&ed_pub).map_err(cannot)?;
+        let curve_sec = ed25519::to_curve25519_sk(&ed_sec).map_err(cannot)?;
+
+        Ok(Box::new(SecretEd25519 { pubkey, curve_pub, curve_sec }))
     }
 }
