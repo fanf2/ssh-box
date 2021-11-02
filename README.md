@@ -4,6 +4,38 @@ ssh-box: use ssh keys to encrypt files
 work in progress
 
 
+caveat: poor key hygiene
+------------------------
+
+It is generally considered to be a bad idea to use the same key pair
+for signing and encryption. SSH key pairs are normally used for
+signing (i.e for authentication), but `ssh-box` repurposes them as
+encryption keys.
+
+The risk with this kind of reuse is that it opens you up to
+cross-protocol attacks, where one protocol is used to gain access to a
+signing or encryption oracle that allows you to break the other
+protocol.
+
+Another tool that re-uses ssh keys for encryption is [`age`][]. The
+https://age-encryption.org/v1 format specification argues that it is
+actually safe, for `age`'s tweaked curve25519 scheme. You can also use
+RSA keys with `age`, but its spec doesn't explain why this use of RSA
+is safe.
+
+The cryptographic constructions used by `age` and `ssh-box` are fairly
+similar, although `ssh-box` mostly uses vanilla libsodium
+constructions, whereas `age` is more cryptographically sophisticated.
+
+
+### keeping clean
+
+To avoid this risk, you can use `ssh-box -g` to generate a key
+specifically for encryption. Its filename is `~/.ssh/box_ed25519`
+which is not one of the standard ssh authentication keys.
+
+
+
 ssh-box file format
 -------------------
 
@@ -60,12 +92,12 @@ from the list.
 ### agility
 
 In the future, this `ssh-box` file format may support other public key
-types, such as `ssh-rsa`. Tools that read `ssh-box` encrypted files
-should not raise an error when they see an unrecognised recipient key
-type.
+types. Tools that read `ssh-box` encrypted files should not raise an
+error when they see an unrecognised recipient key type.
 
-The bulk encryption algorithm is determined by the version string at
-the start of the file.
+The version string at the start of the file determines the bulk
+encryption scheme, and the mapping from ssh key types to asymmetric
+encryption schemes.
 
 
 ### encryption
@@ -74,10 +106,14 @@ When encrypting a file, a fresh AEAD nonce and key are generated, and
 concatenated into a secret blob without any framing. (They have fixed
 sizes determined by the AEAD construction.)
 
-Each recipient's ssh public key is converted using libsodium
+Each ssh-ed25519 recipient public key is converted using libsodium
 [`crypto_sign_ed25519_pk_to_curve25519()`][to curve25519] and the
 resulting key is used to encrypt the secret blob using libsodium
 [`crypto_box_seal()`][sealed box].
+
+Each ssh-rsa recipient public key is used to encrypt the secret blob
+using RSA-OAEP [RFC 8017][] with SHA-256 and MGF1 and the label
+"ssh-box-v1-rsa-oaep".
 
 
 ### decryption
@@ -85,11 +121,14 @@ resulting key is used to encrypt the secret blob using libsodium
 When decrypting a file, the header is searched for a recipient whose
 key type and public key blob match the user's ssh key.
 
-The user's ssh key pair is converted using libsodium
+The user's ssh-ed25519 key pair is converted using libsodium
 [`crypto_sign_ed25519_pk_to_curve25519()` and
 `crypto_sign_ed25519_sk_to_curve25519()`][to curve25519], and the
 resulting key pair is used to decrypt the AEAD secret blob using
 libsodium [`crypto_box_seal_open()`][sealed box].
+
+Or if the user's private key is ssh-rsa, it is used to decrypt the
+secret blob with RSA-OAEPas described above.
 
 
 ### ciphertext
@@ -103,7 +142,7 @@ additional data.
 [to curve25519]: https://libsodium.gitbook.io/doc/advanced/ed25519-curve25519
 [sealed box]: https://libsodium.gitbook.io/doc/public-key_cryptography/sealed_boxes
 [XChaCha20-Poly1305]: https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction
-
+[RFC 8017]: https://www.rfc-editor.org/rfc/rfc8017
 
 licence
 -------
