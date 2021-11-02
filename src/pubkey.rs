@@ -17,6 +17,14 @@ impl From<(&[u8], &str)> for PublicKey {
     }
 }
 
+// for sshbox::parse_message()
+impl From<(PublicKey, &str)> for PublicKey {
+    fn from((mut pubkey, name): (PublicKey, &str)) -> PublicKey {
+        pubkey.name = name.to_owned();
+        pubkey
+    }
+}
+
 // for parse_public_keys()
 impl From<(&str, Vec<u8>, &str)> for PublicKey {
     fn from((algo, blob, name): (&str, Vec<u8>, &str)) -> PublicKey {

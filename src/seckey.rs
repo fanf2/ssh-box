@@ -32,16 +32,14 @@ pub fn parse_secret_key(
         pair(ssh_string_tag("aes256-ctr"), ssh_string_tag("bcrypt")),
         map_parser(ssh_string, pair(ssh_string, be_u32)),
     );
-
     let none_params =
         tuple((ssh_string_tag("none"), ssh_string_tag("none"), be_u32_is(0)));
-
     let cipher_params =
         alt((map(bcrypt_params, Some), value(None, none_params)));
 
     let (_, (cipher_params, pubkey, enciphered)) = tuple((
         preceded(tag(b"openssh-key-v1\0"), cipher_params),
-        preceded(be_u32_is(1), map_parser(ssh_string, ssh_pubkey)),
+        preceded(be_u32_is(1), ssh_string_pubkey),
         terminated(ssh_string, eof),
     ))(&binary[..])
     .map_err(|_: NomErr| anyhow!("could not parse private key"))?;
@@ -59,7 +57,7 @@ pub fn parse_secret_key(
     }
 
     let (algo, builder, part_count) = match pubkey.algo.as_str() {
-        "ssh-ed25519" => ("ssh-ed25519", SecretEd25519::new, ED25519_PARTS),
+        "ssh-ed25519" => ("ssh-ed25519", SecretEd25519::build, ED25519_PARTS),
         _ => return Err(anyhow!("unsupported algoritm")),
     };
 
@@ -128,7 +126,7 @@ impl SecretKey for SecretEd25519 {
 const ED25519_PARTS: usize = 3;
 
 impl SecretEd25519 {
-    fn new(
+    fn build(
         mut pubkey: PublicKey,
         parts: Vec<&[u8]>,
     ) -> Result<Box<dyn SecretKey>> {

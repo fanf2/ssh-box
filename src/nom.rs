@@ -84,3 +84,7 @@ pub fn ssh_string_tag<'a>(
 pub fn ssh_pubkey(input: &[u8]) -> Result<PublicKey> {
     map(consumed(terminated(ssh_string_ldh, rest)), PublicKey::from)(input)
 }
+
+pub fn ssh_string_pubkey(input: &[u8]) -> Result<PublicKey> {
+    map_parser(ssh_string, ssh_pubkey)(input)
+}
