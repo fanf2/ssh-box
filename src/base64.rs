@@ -1,12 +1,13 @@
-use anyhow::{anyhow, Result};
-use sodiumoxide::base64::Variant;
+use crate::prelude::*;
 
 pub fn encode(binary: &[u8]) -> String {
-    sodiumoxide::base64::encode(binary, Variant::Original)
+    use sodiumoxide::base64::Variant::*;
+    sodiumoxide::base64::encode(binary, Original)
 }
 
 pub fn decode(ascii: &[u8]) -> Result<Vec<u8>> {
-    sodiumoxide::base64::decode(ascii, Variant::Original)
+    use sodiumoxide::base64::Variant::*;
+    sodiumoxide::base64::decode(ascii, Original)
         .map_err(|_| anyhow!("could not decode base64"))
 }
 
@@ -38,7 +39,7 @@ pub fn unarmor(ascii: &[u8], prefix: &str, suffix: &str) -> Result<Vec<u8>> {
         tuple((tag(b"\n"), tag(suffix.as_bytes()), eof)),
     );
     let (_, base64_lines) = unarmor(ascii)
-        .map_err(|_: NomErr| anyhow!("could not parse armored base64"))?;
+        .map_err(|_: NomErr| anyhow!("could not remove ascii armor"))?;
 
     decode(&base64_lines.concat())
 }

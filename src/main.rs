@@ -1,15 +1,10 @@
-#![allow(dead_code)]
-
-use anyhow::{anyhow, Result};
+use crate::prelude::*;
 use getopts::Options;
 
-mod askpass;
-mod base64;
-mod key;
-mod nom;
-mod sshbox;
-mod types;
-mod util;
+pub mod base64;
+pub mod nom;
+pub mod prelude;
+pub mod pubkey;
 
 fn usage(progname: &str, opts: Options, status: i32) {
     let brief =
@@ -59,9 +54,10 @@ fn main() -> Result<()> {
 
     let pubkey = b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O4SBvM4uWlCN+Fs8P eg\n";
     let message = b"example\n";
-    let recipients = key::parse_public_keys(pubkey)?;
-    let encrypted = sshbox::encrypt(&recipients, message)?;
-    print!("{}", encrypted);
+    // let recipients = key::parse_public_keys(pubkey)?;
+    // dbg!(recipients);
+    //let encrypted = sshbox::encrypt(&recipients, message)?;
+    //print!("{}", encrypted);
 
     Ok(())
 }
