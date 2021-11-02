@@ -114,7 +114,10 @@ fn encrypt_rsa_oaep(sshkey: &[u8], secrets: &[u8]) -> Result<Vec<u8>> {
     let n = BigUint::from_bytes_be(raw_n);
     let e = BigUint::from_bytes_be(raw_e);
     let pubkey = RsaPublicKey::new(n, e)?;
-    let padding = PaddingScheme::new_oaep::<sha2::Sha256>();
     let mut rng = rand::rngs::OsRng;
-    Ok(pubkey.encrypt(&mut rng, padding, secrets)?)
+    Ok(pubkey.encrypt(&mut rng, rsa_oaep_padding(), secrets)?)
+}
+
+pub fn rsa_oaep_padding() -> PaddingScheme {
+    PaddingScheme::new_oaep_with_label::<sha2::Sha256, _>("ssh-box-v1-rsa-oaep")
 }

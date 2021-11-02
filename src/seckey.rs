@@ -26,8 +26,7 @@ impl SecretKey {
                 sealedbox::open(message, pubkey, seckey).map_err(|_| failed())
             }
             SecretParts::RsaOaep(key) => {
-                let padding = PaddingScheme::new_oaep::<sha2::Sha256>();
-                key.decrypt(padding, message).map_err(|_| failed())
+                key.decrypt(rsa_oaep_padding(), message).map_err(|_| failed())
             }
         }
     }
