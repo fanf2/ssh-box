@@ -108,11 +108,11 @@ sizes determined by the AEAD construction.)
 
 Each ssh-ed25519 recipient public key is converted using libsodium
 [`crypto_sign_ed25519_pk_to_curve25519()`][to curve25519] and the
-resulting key is used to encrypt the secret blob using libsodium
+resulting key is used to encrypt the AEAD secret blob using libsodium
 [`crypto_box_seal()`][sealed box].
 
-Each ssh-rsa recipient public key is used to encrypt the secret blob
-using RSA-OAEP [RFC 8017][] with SHA-256 and MGF1 and the label
+Each ssh-rsa recipient public key is used to encrypt the AEAD secret
+blob using RSA-OAEP [RFC 8017][] with SHA-256 and MGF1 and the label
 "ssh-box-v1-rsa-oaep".
 
 
@@ -128,7 +128,7 @@ resulting key pair is used to decrypt the AEAD secret blob using
 libsodium [`crypto_box_seal_open()`][sealed box].
 
 Or if the user's private key is ssh-rsa, it is used to decrypt the
-secret blob with RSA-OAEPas described above.
+AEAD secret blob with RSA-OAEPas described above.
 
 
 ### ciphertext
