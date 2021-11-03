@@ -18,7 +18,7 @@ fn parse_message(binary: &[u8]) -> Result<(Vec<Recipient>, &[u8], &[u8])> {
     );
 
     let (ciphertext, (header, recipients)) = consumed(parse_header)(binary)
-        .map_err(|_: NomErr| anyhow!("could not parse message header"))?;
+        .map_err(|_| anyhow!("could not parse message header"))?;
 
     Ok((recipients, header, ciphertext))
 }

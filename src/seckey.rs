@@ -21,13 +21,13 @@ enum SecretParts {
 
 impl SecretKey {
     pub fn decrypt(&self, message: &[u8]) -> Result<Vec<u8>> {
-        let failed = || anyhow!("could not decrypt with {}", self.pubkey);
+        let bail = || bail!("could not decrypt with {}", self.pubkey);
         match &self.parts {
             SecretParts::Ed25519(pubkey, seckey) => {
-                sealedbox::open(message, pubkey, seckey).map_err(|_| failed())
+                sealedbox::open(message, pubkey, seckey).or_else(|_| bail())
             }
             SecretParts::RsaOaep(key) => {
-                key.decrypt(rsa_oaep_padding(), message).map_err(|_| failed())
+                key.decrypt(rsa_oaep_padding(), message).or_else(|_| bail())
             }
         }
     }
@@ -64,14 +64,12 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
         preceded(be_u32_is(1), ssh_string_pubkey),
         terminated(ssh_string, eof),
     ))(&binary[..])
-    .map_err(|_: NomErr| anyhow!("could not parse private key"))?;
+    .or_else(|_| bail!("could not parse private key"))?;
 
     let mut secrets = enciphered.to_owned();
 
     let blocksize = if cipher_params.is_some() { 16 } else { 8 };
-    if enciphered.len() % blocksize != 0 {
-        return Err(anyhow!("bad alignment in private key"));
-    }
+    ensure!(enciphered.len() % blocksize == 0, "bad alignment in private key");
     if let Some((salt, rounds)) = cipher_params {
         bcrypt_aes_decrypt(&mut secrets, salt, rounds, askpass)?;
     }
@@ -82,22 +80,18 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
         match pubkey.algo.as_str() {
             "ssh-ed25519" => ("ssh-ed25519", new_ed25519, ED25519_PARTS),
             "ssh-rsa" => ("ssh-rsa", new_rsa_oaep, RSA_OAEP_PARTS),
-            _ => return Err(anyhow!("unsupported algoritm")),
+            _ => bail!("unsupported algoritm"),
         };
 
     let split_parts =
         preceded(ssh_string_tag(algo), count(ssh_string, part_count + 1));
     let (pad, (check1, check2, (blob, mut secret_parts))) =
         tuple((be_u32, be_u32, consumed(split_parts)))(&secrets[..])
-            .map_err(|_: NomErr| anyhow!("could not parse encrypted key"))?;
+            .or_else(|_| bail!("could not parse encrypted key"))?;
 
-    if check1 != check2 {
-        return Err(anyhow!("could not decrypt private key"));
-    }
+    ensure!(check1 == check2, "could not decrypt private key");
     for (i, &e) in pad.iter().enumerate() {
-        if e != 1 + i as u8 {
-            return Err(anyhow!("erroneous padding in private key"));
-        }
+        ensure!(e == 1 + i as u8, "erroneous padding in private key");
     }
 
     pubkey.name = String::from_utf8(secret_parts.pop().unwrap().to_owned())?;
@@ -148,19 +142,17 @@ fn new_ed25519(pubkey: &PublicKey, parts: Vec<&[u8]>) -> Result<SecretParts> {
         length_value(be_u32, tag(raw_pub)),
         eof,
     ))(&pubkey.blob)
-    .map_err(|_: NomErr| anyhow!("inconsistent private key"))?;
+    .map_err(|_| anyhow!("inconsistent private key"))?;
 
     let ed_sec = ed25519::SecretKey::from_slice(raw_sec)
         .ok_or_else(|| anyhow!("invalid ed25519 secret key"))?;
     let ed_pub = ed_sec.public_key();
 
-    if raw_pub != ed_pub.as_ref() {
-        return Err(anyhow!("inconsistent private key"));
-    }
+    ensure!(raw_pub == ed_pub.as_ref(), "inconsistent private key");
 
-    let cannot = |_| anyhow!("cannot decrypt with this private key");
-    let curve_pub = ed25519::to_curve25519_pk(&ed_pub).map_err(cannot)?;
-    let curve_sec = ed25519::to_curve25519_sk(&ed_sec).map_err(cannot)?;
+    let bail = |_| anyhow!("cannot decrypt with this private key");
+    let curve_pub = ed25519::to_curve25519_pk(&ed_pub).map_err(bail)?;
+    let curve_sec = ed25519::to_curve25519_sk(&ed_sec).map_err(bail)?;
 
     Ok(SecretParts::Ed25519(curve_pub, curve_sec))
 }
@@ -185,7 +177,7 @@ fn new_rsa_oaep(pubkey: &PublicKey, parts: Vec<&[u8]>) -> Result<SecretParts> {
         length_value(be_u32, tag(parts[0])),
         eof,
     ))(&pubkey.blob)
-    .map_err(|_: NomErr| anyhow!("inconsistent private key"))?;
+    .map_err(|_| anyhow!("inconsistent private key"))?;
 
     let key = RsaPrivateKey::from_components(n, e, d, vec![p, q]);
     key.validate()?;

@@ -21,8 +21,7 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let progname = &args[0];
 
-    sodiumoxide::init()
-        .map_err(|_| anyhow!("could not initialize libsodium"))?;
+    sodiumoxide::init().or_else(|_| bail!("could not initialize libsodium"))?;
 
     const RCPT_FILE: &str = "ssh_box_keys";
     const KEY_FILE: &str = "~/.ssh/box_ed25519";
@@ -69,6 +68,11 @@ ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDJmjUTr9pyZJEzs/iS48mZZEofOQBCu27VKL/mlu38
     print!("{}", encrypted);
 
     Ok(())
+}
+
+fn args_inout(args: Vec<String>) -> Result<()> {
+    ensure!(args.len() != 2, "must have input and output file arguments");
+    unimplemented!()
 }
 
 fn keygen(mut file: String) -> Result<()> {

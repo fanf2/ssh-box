@@ -8,7 +8,7 @@ pub fn base64_encode(binary: &[u8]) -> String {
 pub fn base64_decode(ascii: &[u8]) -> Result<Vec<u8>> {
     use sodiumoxide::base64::Variant::*;
     sodiumoxide::base64::decode(ascii, Original)
-        .map_err(|_| anyhow!("could not decode base64"))
+        .or_else(|_| bail!("could not decode base64"))
 }
 
 pub fn ascii_armored(binary: &[u8], prefix: &str, suffix: &str) -> String {
@@ -36,7 +36,7 @@ pub fn ascii_unarmor(
         tuple((tag(b"\n"), tag(suffix.as_bytes()), eof)),
     );
     let (_, base64_lines) = unarmor(ascii)
-        .map_err(|_: NomErr| anyhow!("could not remove ascii armor"))?;
+        .or_else(|_: NomErr| bail!("could not remove ascii armor"))?;
 
     base64_decode(&base64_lines.concat())
 }

@@ -76,7 +76,7 @@ pub fn parse_public_keys(ascii: &[u8]) -> Result<Vec<PublicKey>> {
     ));
     let pubkey = map(keytext, PublicKey::from);
     let (_, keys) = commented_lines(pubkey)(ascii)
-        .map_err(|_: NomErr| anyhow!("could not parse list of public keys"))?;
+        .or_else(|_| bail!("could not parse list of public keys"))?;
     Ok(keys)
 }
 
@@ -85,7 +85,7 @@ impl PublicKey {
         match self.algo.as_str() {
             "ssh-ed25519" => encrypt_ed25519(&self.blob, secrets),
             "ssh-rsa" => encrypt_rsa_oaep(&self.blob, secrets),
-            _ => Err(anyhow!("unsupported algoritm")),
+            _ => bail!("unsupported algoritm"),
         }
         .with_context(|| format!("{}", self))
     }
@@ -95,7 +95,7 @@ fn encrypt_ed25519(sshkey: &[u8], secrets: &[u8]) -> Result<Vec<u8>> {
     use crate::nom::*;
     let (_, rawkey) =
         delimited(ssh_string_tag("ssh-ed25519"), ssh_string, eof)(sshkey)
-            .map_err(|_: NomErr| anyhow!("could not unpack key"))?;
+            .map_err(|_| anyhow!("could not unpack key"))?;
     let ed25519 = ed25519::PublicKey::from_slice(rawkey)
         .ok_or_else(|| anyhow!("incorrect key length"))?;
     let curve25519 = ed25519::to_curve25519_pk(&ed25519)
@@ -110,7 +110,7 @@ fn encrypt_rsa_oaep(sshkey: &[u8], secrets: &[u8]) -> Result<Vec<u8>> {
         pair(ssh_string, ssh_string),
         eof,
     )(sshkey)
-    .map_err(|_: NomErr| anyhow!("could not unpack key"))?;
+    .or_else(|_| bail!("could not unpack key"))?;
     let n = BigUint::from_bytes_be(raw_n);
     let e = BigUint::from_bytes_be(raw_e);
     let pubkey = RsaPublicKey::new(n, e)?;
