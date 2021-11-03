@@ -40,7 +40,9 @@ fn main() -> Result<()> {
 
     let rcpt_file =
         matches.opt_str("r").unwrap_or_else(|| RCPT_FILE.to_string());
+
     let key_file = matches.opt_str("s").unwrap_or_else(|| KEY_FILE.to_string());
+    let key_file = map_tilde(key_file)?;
 
     if matches.opt_present("h") {
         usage(progname, opts, 0);
@@ -70,23 +72,76 @@ ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDJmjUTr9pyZJEzs/iS48mZZEofOQBCu27VKL/mlu38
     Ok(())
 }
 
-fn args_inout(args: Vec<String>) -> Result<()> {
-    ensure!(args.len() != 2, "must have input and output file arguments");
-    unimplemented!()
+fn map_tilde(file: String) -> Result<String> {
+    let home =
+        std::env::var("HOME").with_context(|| "expanding ~ with $HOME")?;
+    if file.starts_with("~/") {
+        Ok(file.replacen("~", &home, 1))
+    } else {
+        Ok(file)
+    }
 }
 
-fn keygen(mut file: String) -> Result<()> {
+fn keygen(file: String) -> Result<()> {
     use std::process::Command;
 
-    let home = std::env::var("HOME")?;
     let user = std::env::var("USER")?;
     let comment = format!("{} (ssh-box)", user);
 
-    if file.starts_with("~/") {
-        file = file.replacen("~", &home, 1);
-    }
     let status = Command::new("ssh-keygen")
         .args(["-t", "ed25519", "-f", &file, "-C", &comment])
         .status()?;
     std::process::exit(status.code().unwrap_or(1));
+}
+
+struct Output {
+    name: String,
+    write: Box<dyn std::io::Write>,
+}
+
+impl Output {
+    fn new(name: &str) -> Result<Output> {
+        let write: Box<dyn std::io::Write>;
+        if name == "-" {
+            ensure!(
+                !atty::is(atty::Stream::Stdout),
+                "output should be a file or pipe"
+            );
+            write = Box::new(std::io::stdout())
+        } else {
+            write = Box::new(
+                std::fs::File::create(name)
+                    .with_context(|| format!("writing {}", name))?,
+            )
+        }
+        let name = name.to_owned();
+        Ok(Output { name, write })
+    }
+
+    fn write(mut self, data: &[u8]) -> Result<()> {
+        self.write.write_all(data)?;
+        self.write.flush()?;
+        Ok(())
+    }
+}
+
+fn read_input(name: &str) -> Result<Vec<u8>> {
+    if name == "-" {
+        ensure!(
+            !atty::is(atty::Stream::Stdin),
+            "input should be a file or pipe"
+        );
+        let mut input = Vec::new();
+        std::io::stdin().read_to_end(&mut input)?;
+        Ok(input)
+    } else {
+        std::fs::read(name).with_context(|| format!("reading {}", name))
+    }
+}
+
+fn args_inout(args: Vec<String>) -> Result<(Vec<u8>, Output)> {
+    ensure!(args.len() != 2, "must have input and output file arguments");
+    let input = read_input(&args[0])?;
+    let output = Output::new(&args[1])?;
+    Ok((input, output))
 }

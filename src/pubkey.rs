@@ -62,8 +62,25 @@ impl std::fmt::Display for PublicKey {
 }
 
 pub fn read_public_keys(key_file: &str) -> Result<Vec<PublicKey>> {
-    let context = || format!("reading {}", key_file);
-    let ascii = std::fs::read(key_file).with_context(context)?;
+    let mut path = Path::new(key_file);
+    let mut find;
+    // if it is just a leafname, we might need to search for it
+    if path.components().nth(1).is_none() && !path.exists() {
+        find = path.canonicalize()?;
+        while find.pop(/* path */) {
+            find.push(".git");
+            if find.exists() || !find.pop(/* .git */) || !find.pop(/* .. */) {
+                break;
+            }
+            find.push(path);
+            if find.exists() {
+                path = find.as_path();
+                break;
+            }
+        }
+    }
+    let context = || format!("reading {}", path.display());
+    let ascii = std::fs::read(path).with_context(context)?;
     parse_public_keys(&ascii).with_context(context)
 }
 
