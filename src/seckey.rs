@@ -3,6 +3,7 @@ use crate::prelude::*;
 #[derive(Clone, Debug, Eq)]
 pub struct SecretKey {
     pub pubkey: PublicKey,
+    pub blob: Vec<u8>,
     parts: SecretParts,
 }
 
@@ -58,7 +59,7 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
     let cipher_params =
         alt((map(bcrypt_params, Some), value(None, none_params)));
 
-    let (_, (cipher_params, pubkey, enciphered)) = tuple((
+    let (_, (cipher_params, mut pubkey, enciphered)) = tuple((
         preceded(tag(b"openssh-key-v1\0"), cipher_params),
         preceded(be_u32_is(1), ssh_string_pubkey),
         terminated(ssh_string, eof),
@@ -67,17 +68,15 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
 
     let mut secrets = enciphered.to_owned();
 
-    if let Some((salt, rounds)) = cipher_params {
-        if enciphered.len() % 16 != 0 {
-            return Err(anyhow!("bad alignment in private key"));
-        } else {
-            bcrypt_aes_decrypt(&mut secrets, salt, rounds, askpass)?;
-        }
-    } else if enciphered.len() % 8 != 0 {
+    let blocksize = if cipher_params.is_some() { 16 } else { 8 };
+    if enciphered.len() % blocksize != 0 {
         return Err(anyhow!("bad alignment in private key"));
     }
+    if let Some((salt, rounds)) = cipher_params {
+        bcrypt_aes_decrypt(&mut secrets, salt, rounds, askpass)?;
+    }
 
-    type Builder = fn(PublicKey, Vec<&[u8]>) -> Result<SecretKey>;
+    type Builder = fn(&PublicKey, Vec<&[u8]>) -> Result<SecretParts>;
 
     let (algo, builder, part_count): (&str, Builder, usize) =
         match pubkey.algo.as_str() {
@@ -87,9 +86,9 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
         };
 
     let split_parts =
-        preceded(ssh_string_tag(algo), count(ssh_string, part_count));
-    let (pad, (check1, check2, secret_parts)) =
-        tuple((be_u32, be_u32, split_parts))(&secrets[..])
+        preceded(ssh_string_tag(algo), count(ssh_string, part_count + 1));
+    let (pad, (check1, check2, (blob, mut secret_parts))) =
+        tuple((be_u32, be_u32, consumed(split_parts)))(&secrets[..])
             .map_err(|_: NomErr| anyhow!("could not parse encrypted key"))?;
 
     if check1 != check2 {
@@ -101,7 +100,11 @@ pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
         }
     }
 
-    builder(pubkey, secret_parts)
+    pubkey.name = String::from_utf8(secret_parts.pop().unwrap().to_owned())?;
+    let parts = builder(&pubkey, secret_parts)?;
+    let blob = blob.to_owned();
+
+    Ok(SecretKey { pubkey, blob, parts })
 }
 
 fn bcrypt_aes_decrypt(
@@ -131,16 +134,14 @@ fn bcrypt_aes_decrypt(
     Ok(())
 }
 
-const ED25519_PARTS: usize = 3;
+const ED25519_PARTS: usize = 2;
 
-fn new_ed25519(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
+fn new_ed25519(pubkey: &PublicKey, parts: Vec<&[u8]>) -> Result<SecretParts> {
     use crate::nom::*;
     assert!(parts.len() == ED25519_PARTS);
 
     let raw_pub = parts[0];
     let raw_sec = parts[1];
-
-    pubkey.name = String::from_utf8(parts[2].to_owned())?;
 
     tuple((
         ssh_string_tag("ssh-ed25519"),
@@ -160,15 +161,14 @@ fn new_ed25519(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
     let cannot = |_| anyhow!("cannot decrypt with this private key");
     let curve_pub = ed25519::to_curve25519_pk(&ed_pub).map_err(cannot)?;
     let curve_sec = ed25519::to_curve25519_sk(&ed_sec).map_err(cannot)?;
-    let parts = SecretParts::Ed25519(curve_pub, curve_sec);
 
-    Ok(SecretKey { pubkey, parts })
+    Ok(SecretParts::Ed25519(curve_pub, curve_sec))
 }
 
-const RSA_OAEP_PARTS: usize = 7;
+const RSA_OAEP_PARTS: usize = 6;
 
 #[allow(clippy::many_single_char_names)]
-fn new_rsa_oaep(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
+fn new_rsa_oaep(pubkey: &PublicKey, parts: Vec<&[u8]>) -> Result<SecretParts> {
     use crate::nom::*;
     assert!(parts.len() == RSA_OAEP_PARTS);
 
@@ -178,8 +178,6 @@ fn new_rsa_oaep(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
     // skip iqmp
     let p = BigUint::from_bytes_be(parts[4]);
     let q = BigUint::from_bytes_be(parts[5]);
-
-    pubkey.name = String::from_utf8(parts[6].to_owned())?;
 
     tuple((
         ssh_string_tag("ssh-rsa"),
@@ -191,10 +189,9 @@ fn new_rsa_oaep(mut pubkey: PublicKey, parts: Vec<&[u8]>) -> Result<SecretKey> {
 
     let key = RsaPrivateKey::from_components(n, e, d, vec![p, q]);
     key.validate()?;
-    // box it up because it is big
-    let parts = SecretParts::RsaOaep(Box::new(key));
 
-    Ok(SecretKey { pubkey, parts })
+    // box it up because it is big
+    Ok(SecretParts::RsaOaep(Box::new(key)))
 }
 
 #[cfg(test)]
