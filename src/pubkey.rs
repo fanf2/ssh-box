@@ -66,8 +66,9 @@ pub fn read_public_keys(key_file: &str) -> Result<Vec<PublicKey>> {
     let mut find;
     // if it is just a leafname, we might need to search for it
     if path.components().nth(1).is_none() && !path.exists() {
-        find = path.canonicalize()?;
-        while find.pop(/* path */) {
+        find = std::fs::canonicalize(".")?;
+        println!("searching from  {}", find.display());
+        loop {
             find.push(".git");
             if find.exists() || !find.pop(/* .git */) || !find.pop(/* .. */) {
                 break;
@@ -77,6 +78,7 @@ pub fn read_public_keys(key_file: &str) -> Result<Vec<PublicKey>> {
                 path = find.as_path();
                 break;
             }
+            find.pop();
         }
     }
     let context = || format!("reading {}", path.display());

@@ -47,28 +47,38 @@ fn main() -> Result<()> {
     if matches.opt_present("h") {
         usage(progname, opts, 0);
     } else if matches.opt_present("c") {
-        println!("checking wrt {}", rcpt_file);
+        let recipients = read_public_keys(&rcpt_file)?;
+        let input = args_input(&matches.free)?;
+        let (only_rcpt, only_file) = sshbox::check(&recipients, &input)?;
+        let mut status = 0;
+        if !only_rcpt.is_empty() {
+            print!("only in {}:\n{}", &rcpt_file, only_rcpt);
+            status = 1;
+        }
+        if !only_file.is_empty() {
+            print!("only in {}:\n{}", matches.free[0], only_file);
+            status = 1;
+        }
+        std::process::exit(status);
     } else if matches.opt_present("d") {
-        println!("decrypting with {}", key_file);
+        let askpass = askpass::for_file(&key_file);
+        let seckey = read_secret_key(&key_file, askpass)?;
+        let (input, output) = args_in_out(&matches.free)?;
+        let cleartext = sshbox::decrypt(&seckey, &input)?;
+        output.write(&cleartext)?;
     } else if matches.opt_present("e") {
-        println!("encrypting to {}", rcpt_file);
+        let recipients = read_public_keys(&rcpt_file)?;
+        let (input, output) = args_in_out(&matches.free)?;
+        let ciphertext = sshbox::encrypt(&recipients, &input)?;
+        output.write(ciphertext.as_bytes())?;
     } else if matches.opt_present("l") {
-        println!("listing recipients");
+        let output = sshbox::list(&args_input(&matches.free)?)?;
+        std::io::stdout().write_all(output.as_bytes())?;
     } else if matches.opt_present("k") {
-        return keygen(key_file);
+        keygen(key_file)?;
     } else {
-        //usage(progname, opts, 1);
+        usage(progname, opts, 1);
     }
-
-    let pubkeys = b"\
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O4SBvM4uWlCN+Fs8P ed\n\
-ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDJmjUTr9pyZJEzs/iS48mZZEofOQBCu27VKL/mlu38+KJ3aeR7dCiQbrF97+k8+S82g64zHxxs4gwFwLmQrym6/WmrCxI1VPzWDQvSZ6u8jQN0m/N+uatXTV3jqjaFeVFGwdR6+4SFmPTFqLpv4JrgMlnjq0Rw2s8JAA7h0Dyq4YDBoTd7/37fCY9KJfju54G7mDKszm8MvDb/f/7xXDkQkKmb46PB9+T4q/j0iWMGqV9PCot3YwiIIp8iM+ZUh/jdj+0bxP3WJOfkhBQf7msuE2yKjzoWZMHPtJ2v5dusaqS5t6GCgA2QloP2ebYDSBh2ugUZzstwhLIdc9jIvOGayyXKyDDblqf2xKx0Pm0RNc+7STmYI0pXuvBycknHlBq4JzZQD5M39r/x+tJC5/WeePbaILB32di3EKwEAGOwXbC4zOb+7p3kPAFOkZRfXkG70T4sLmlZD3Vhb0ac5UABc2a/XTYb4gjK4jy2mn3qSC4gvx0rqcks50XmV0rRoQM= rsa\n\
-";
-    let message = b"example\n";
-    let recipients = parse_public_keys(pubkeys)?;
-    let encrypted = sshbox::encrypt(&recipients, message)?;
-    print!("{}", encrypted);
-
     Ok(())
 }
 
@@ -84,10 +94,7 @@ fn map_tilde(file: String) -> Result<String> {
 
 fn keygen(file: String) -> Result<()> {
     use std::process::Command;
-
-    let user = std::env::var("USER")?;
-    let comment = format!("{} (ssh-box)", user);
-
+    let comment = format!("{} (ssh-box)", std::env::var("USER")?);
     let status = Command::new("ssh-keygen")
         .args(["-t", "ed25519", "-f", &file, "-C", &comment])
         .status()?;
@@ -119,8 +126,9 @@ impl Output {
     }
 
     fn write(mut self, data: &[u8]) -> Result<()> {
-        self.write.write_all(data)?;
-        self.write.flush()?;
+        let context = || format!("writing {}", self.name);
+        self.write.write_all(data).with_context(context)?;
+        self.write.flush().with_context(context)?;
         Ok(())
     }
 }
@@ -139,9 +147,14 @@ fn read_input(name: &str) -> Result<Vec<u8>> {
     }
 }
 
-fn args_inout(args: Vec<String>) -> Result<(Vec<u8>, Output)> {
-    ensure!(args.len() != 2, "must have input and output file arguments");
+fn args_in_out(args: &[String]) -> Result<(Vec<u8>, Output)> {
+    ensure!(args.len() == 2, "must have input and output file arguments");
     let input = read_input(&args[0])?;
     let output = Output::new(&args[1])?;
     Ok((input, output))
+}
+
+fn args_input(args: &[String]) -> Result<Vec<u8>> {
+    ensure!(args.len() == 1, "must have one input file argument");
+    read_input(&args[0])
 }

@@ -23,6 +23,34 @@ fn parse_message(binary: &[u8]) -> Result<(Vec<Recipient>, &[u8], &[u8])> {
     Ok((recipients, header, ciphertext))
 }
 
+pub fn check(wanted: &[PublicKey], message: &[u8]) -> Result<(String, String)> {
+    let binary = ascii_unarmor(message, PREFIX, SUFFIX)?;
+    let (found, _, _) = parse_message(&binary)?;
+    let mut only_wanted = HashMap::new();
+    let mut only_found = HashMap::new();
+    let mut list_wanted = String::new();
+    let mut list_found = String::new();
+    for pubkey in wanted {
+        only_wanted.insert(&pubkey.blob, pubkey);
+    }
+    for (pubkey, _) in &found {
+        only_found.insert(&pubkey.blob, pubkey);
+    }
+    for pubkey in wanted {
+        only_found.remove(&pubkey.blob);
+    }
+    for (pubkey, _) in &found {
+        only_wanted.remove(&pubkey.blob);
+    }
+    for pubkey in only_wanted.values() {
+        write!(list_wanted, "{:b}", pubkey)?;
+    }
+    for pubkey in only_found.values() {
+        write!(list_found, "{:b}", pubkey)?;
+    }
+    Ok((list_wanted, list_found))
+}
+
 pub fn list(message: &[u8]) -> Result<String> {
     let binary = ascii_unarmor(message, PREFIX, SUFFIX)?;
     let (recipients, _, _) = parse_message(&binary)?;
