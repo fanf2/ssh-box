@@ -21,8 +21,6 @@ pub type NomErr<'a> = nom::Err<NomError<'a>>;
 
 type Result<'a, O> = nom::IResult<&'a [u8], O, NomError<'a>>;
 
-type ResultIn<'a> = Result<'a, &'a [u8]>;
-
 fn commentary(input: &[u8]) -> Result<usize> {
     many0_count(tuple((
         space0,
@@ -50,7 +48,7 @@ where
 
 pub fn is_utf8<'a, P>(parser: P) -> impl FnMut(&'a [u8]) -> Result<'a, &'a str>
 where
-    P: FnMut(&'a [u8]) -> ResultIn<'a>,
+    P: FnMut(&'a [u8]) -> Result<'a, &'a [u8]>,
 {
     map_res(parser, std::str::from_utf8)
 }
@@ -60,11 +58,11 @@ fn space_char(c: u8) -> bool {
     b"\x09\x0A\x0B\x0C\x0D\x20".contains(&c)
 }
 
-pub fn opt_space(input: &[u8]) -> ResultIn {
+pub fn opt_space(input: &[u8]) -> Result<&[u8]> {
     take_while(space_char)(input)
 }
 
-pub fn is_space(input: &[u8]) -> ResultIn {
+pub fn is_space(input: &[u8]) -> Result<&[u8]> {
     take_while1(space_char)(input)
 }
 
@@ -80,7 +78,7 @@ pub fn be_u32_is<'a>(wanted: u32) -> impl FnMut(&'a [u8]) -> Result<'a, u32> {
     verify(be_u32, move |&found| found == wanted)
 }
 
-pub fn ssh_string(input: &[u8]) -> ResultIn {
+pub fn ssh_string(input: &[u8]) -> Result<&[u8]> {
     length_data(be_u32)(input)
 }
 
