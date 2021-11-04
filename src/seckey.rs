@@ -44,10 +44,10 @@ pub fn read_secret_key(key_file: &str, askpass: AskPass) -> Result<SecretKey> {
 pub fn parse_secret_key(ascii: &[u8], askpass: AskPass) -> Result<SecretKey> {
     use crate::nom::*;
 
-    let binary = ascii_unarmor(
+    let binary = pem_decap(
         ascii,
-        "-----BEGIN OPENSSH PRIVATE KEY-----\n",
-        "-----END OPENSSH PRIVATE KEY-----\n",
+        "-----BEGIN OPENSSH PRIVATE KEY-----",
+        "-----END OPENSSH PRIVATE KEY-----",
     )?;
 
     let bcrypt_params = preceded(

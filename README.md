@@ -39,14 +39,14 @@ which is not one of the standard ssh authentication keys.
 ssh-box file format
 -------------------
 
-A file encrypted by `ssh-box` is an ASCII-armored binary file. The
+A file encrypted by `ssh-box` is a PEM-encapsulated binary file. The
 binary consists of a header followed by the ciphertext.
 
 
-### ASCII armor
+### encapsulation
 
 The binary file is base64-encoded and delimited by prefix and suffix
-lines. For example,
+lines, as described in [RFC 7486][]. For example,
 
     -----BEGIN SSH-BOX ENCRYPTED FILE-----
     c3NoLWJveC12MQAAAAABAAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O
@@ -54,6 +54,12 @@ lines. For example,
     Py10Oi9sXUN/Q4Kk9aNvbSXVaXQz76Q94cGT89pPx/lD5QusSNxmc8F1PmaGlakDwinczXT7
     JDoDtw/CJDXQ7qdnt/OVDnTRDakxZU+eGgRVMeiwAgkzphgDXFN0IXvW
     -----END SSH-BOX ENCRYPTED FILE-----
+
+An `ssh-box` file should be generated according to the
+`stricttextualmsg` syntax, and it should be parsed according to the
+`laxtextualmsg` syntax, as described in [RFC 7486][] section 3.
+
+[RFC 7486]: https://www.rfc-editor.org/rfc/rfc7486
 
 
 ### header

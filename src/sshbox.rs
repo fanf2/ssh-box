@@ -1,7 +1,7 @@
 use crate::prelude::*;
 
-const PREFIX: &str = "-----BEGIN SSH-BOX ENCRYPTED FILE-----\n";
-const SUFFIX: &str = "-----END SSH-BOX ENCRYPTED FILE-----\n";
+const PREFIX: &str = "-----BEGIN SSH-BOX ENCRYPTED FILE-----";
+const SUFFIX: &str = "-----END SSH-BOX ENCRYPTED FILE-----";
 
 const MAGIC: &[u8] = b"ssh-box-v1\0";
 
@@ -24,7 +24,7 @@ fn parse_message(binary: &[u8]) -> Result<(Vec<Recipient>, &[u8], &[u8])> {
 }
 
 pub fn check(wanted: &[PublicKey], message: &[u8]) -> Result<(String, String)> {
-    let binary = ascii_unarmor(message, PREFIX, SUFFIX)?;
+    let binary = pem_decap(message, PREFIX, SUFFIX)?;
     let (found, _, _) = parse_message(&binary)?;
     let mut only_wanted = HashMap::new();
     let mut only_found = HashMap::new();
@@ -52,7 +52,7 @@ pub fn check(wanted: &[PublicKey], message: &[u8]) -> Result<(String, String)> {
 }
 
 pub fn list(message: &[u8]) -> Result<String> {
-    let binary = ascii_unarmor(message, PREFIX, SUFFIX)?;
+    let binary = pem_decap(message, PREFIX, SUFFIX)?;
     let (recipients, _, _) = parse_message(&binary)?;
 
     let mut list = String::new();
@@ -63,7 +63,7 @@ pub fn list(message: &[u8]) -> Result<String> {
 }
 
 pub fn decrypt(seckey: &SecretKey, message: &[u8]) -> Result<Vec<u8>> {
-    let binary = ascii_unarmor(message, PREFIX, SUFFIX)?;
+    let binary = pem_decap(message, PREFIX, SUFFIX)?;
     let (recipients, header, ciphertext) = parse_message(&binary)?;
 
     let (_, encrypted) = recipients
@@ -103,7 +103,7 @@ pub fn encrypt(recipients: &[PublicKey], message: &[u8]) -> Result<String> {
     let ciphertext = aead::seal(message, Some(binary.bytes()), &nonce, &key);
     binary.add_bytes(&ciphertext);
 
-    Ok(ascii_armored(binary.bytes(), PREFIX, SUFFIX))
+    Ok(pem_encap(binary.bytes(), PREFIX, SUFFIX))
 }
 
 pub struct Buf(Vec<u8>);

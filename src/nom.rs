@@ -55,6 +55,19 @@ where
     map_res(parser, std::str::from_utf8)
 }
 
+// RFC 7468 `W` space: HT, LF, VT, FF, CR, SP
+fn space_char(c: u8) -> bool {
+    b"\x09\x0A\x0B\x0C\x0D\x20".contains(&c)
+}
+
+pub fn opt_space(input: &[u8]) -> ResultIn {
+    take_while(space_char)(input)
+}
+
+pub fn is_space(input: &[u8]) -> ResultIn {
+    take_while1(space_char)(input)
+}
+
 pub fn is_ldh(input: &[u8]) -> Result<&str> {
     is_utf8(is_a(LDH_CHARS))(input)
 }
