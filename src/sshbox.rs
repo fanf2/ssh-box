@@ -1,76 +1,88 @@
 use crate::prelude::*;
 
-const PREFIX: &str = "-----BEGIN SSH-BOX ENCRYPTED FILE-----";
-const SUFFIX: &str = "-----END SSH-BOX ENCRYPTED FILE-----";
+const PEM_LABEL: &str = "SSH-BOX ENCRYPTED FILE";
 
-const MAGIC: &[u8] = b"ssh-box-v1\0";
+const MAGIC: &[u8] = b"https://dotat.at/prog/ssh-box/v1\0";
 
-type Recipient<'a> = (PublicKey, &'a [u8]);
-
-fn parse_message(binary: &[u8]) -> Result<(Vec<Recipient>, &[u8], &[u8])> {
-    use crate::nom::*;
-
-    let pubkey_name =
-        map(pair(ssh_string_pubkey, is_utf8(ssh_string)), PublicKey::from);
-    let parse_header = length_count(
-        preceded(tag(MAGIC), be_u32),
-        pair(pubkey_name, ssh_string),
-    );
-
-    let (ciphertext, (header, recipients)) = consumed(parse_header)(binary)
-        .map_err(|_| anyhow!("could not parse message header"))?;
-
-    Ok((recipients, header, ciphertext))
+pub struct Header {
+    rcpt: HashMap<PublicKey, Vec<u8>>,
+    label: Vec<u8>,
+    other: Vec<Record>,
+    errors: Vec<Record>,
 }
 
+fn parse_message(binary: &[u8]) -> Result<(Header, &[u8], &[u8])> {
+    use crate::nom::*;
+    use nom::number::complete::u8 as byte;
+
+    let zero = verify(byte, |&n| n == 0);
+    let non0 = verify(byte, |&n| n != 0);
+    let parse_one = length_count(non0, ssh_string_owned);
+    let parse_all = preceded(tag(MAGIC), many_till(parse_one, zero));
+
+    let (ciphertext, (authdata, (mut items, _zero))) =
+        consumed(parse_all)(binary)
+            .map_err(|_| anyhow!("could not parse message header"))?;
+
+    let mut rcpt = HashMap::new();
+    let mut label = Vec::new();
+    let mut other = Vec::new();
+    let mut errors = Vec::new();
+    for mut item in items.drain(..) {
+        match &*item[0] {
+            b"label" => {
+                if item.len() == 2 {
+                    label.extend_from_slice(&*item[1]);
+                } else {
+                    errors.push(item);
+                }
+            }
+            b"ssh-ed25519" | b"ssh-rsa" => {
+                let secrets = item.pop().unwrap();
+                // XXX error checking
+                let pubkey = PublicKey::new(item);
+                // XXX duplicate checking
+                rcpt.insert(pubkey, secrets);
+            }
+            _ => {
+                other.push(item);
+            }
+        }
+    }
+
+    let header = Header { rcpt, label, other, errors };
+    Ok((header, authdata, ciphertext))
+}
+
+#[allow(unused_variables)]
 pub fn check(wanted: &[PublicKey], message: &[u8]) -> Result<(String, String)> {
-    let binary = pem_decap(message, PREFIX, SUFFIX)?;
-    let (found, _, _) = parse_message(&binary)?;
-    let mut only_wanted = HashMap::new();
-    let mut only_found = HashMap::new();
-    let mut list_wanted = String::new();
-    let mut list_found = String::new();
-    for pubkey in wanted {
-        only_wanted.insert(&pubkey.blob, pubkey);
-    }
-    for (pubkey, _) in &found {
-        only_found.insert(&pubkey.blob, pubkey);
-    }
-    for pubkey in wanted {
-        only_found.remove(&pubkey.blob);
-    }
-    for (pubkey, _) in &found {
-        only_wanted.remove(&pubkey.blob);
-    }
-    for pubkey in only_wanted.values() {
-        write!(list_wanted, "{:b}", pubkey)?;
-    }
-    for pubkey in only_found.values() {
-        write!(list_found, "{:b}", pubkey)?;
-    }
-    Ok((list_wanted, list_found))
+    let binary = pem_decap(message, PEM_LABEL)?;
+    let (header, _, _) = parse_message(&binary)?;
+    unimplemented!()
 }
 
 pub fn list(message: &[u8]) -> Result<String> {
-    let binary = pem_decap(message, PREFIX, SUFFIX)?;
-    let (recipients, _, _) = parse_message(&binary)?;
+    let binary = pem_decap(message, PEM_LABEL)?;
+    let (header, _, _) = parse_message(&binary)?;
 
     let mut list = String::new();
-    for (pubkey, _) in recipients {
+    for pubkey in header.rcpt.keys() {
         write!(list, "{:b}", pubkey)?;
     }
     Ok(list)
 }
 
-pub fn decrypt(seckey: &SecretKey, message: &[u8]) -> Result<Vec<u8>> {
-    let binary = pem_decap(message, PREFIX, SUFFIX)?;
-    let (recipients, header, ciphertext) = parse_message(&binary)?;
-
-    let (_, encrypted) = recipients
-        .iter()
-        .find(|(pubkey, _)| pubkey == &seckey.pubkey)
-        .ok_or_else(|| anyhow!("no recipient matches {}", &seckey.pubkey))?;
-
+pub fn decrypt(
+    seckey: &SecretKey,
+    message: &[u8],
+) -> Result<(Header, Vec<u8>)> {
+    let binary = pem_decap(message, PEM_LABEL)?;
+    let (header, authdata, ciphertext) = parse_message(&binary)?;
+    let pubkey = seckey.pubkey();
+    let encrypted = header
+        .rcpt
+        .get(&pubkey)
+        .ok_or_else(|| anyhow!("no recipient matches {}", pubkey))?;
     let secrets = seckey.decrypt(encrypted)?;
 
     let nonce = aead::Nonce::from_slice(&secrets[0..aead::NONCEBYTES])
@@ -78,8 +90,10 @@ pub fn decrypt(seckey: &SecretKey, message: &[u8]) -> Result<Vec<u8>> {
     let key = aead::Key::from_slice(&secrets[aead::NONCEBYTES..])
         .ok_or_else(|| anyhow!("invalid aead key"))?;
 
-    aead::open(ciphertext, Some(header), &nonce, &key)
-        .map_err(|_| anyhow!("aead decryption failed"))
+    let body = aead::open(ciphertext, Some(authdata), &nonce, &key)
+        .map_err(|_| anyhow!("aead decryption failed"))?;
+
+    Ok((header, body))
 }
 
 pub fn encrypt(recipients: &[PublicKey], message: &[u8]) -> Result<String> {
@@ -92,43 +106,16 @@ pub fn encrypt(recipients: &[PublicKey], message: &[u8]) -> Result<String> {
 
     let mut binary = Buf::new();
     binary.add_bytes(MAGIC);
-    binary.add_u32(recipients.len() as u32);
 
     for pubkey in recipients {
-        binary.add_string(&pubkey.blob);
-        binary.add_string(pubkey.name.as_bytes());
-        binary.add_string(&pubkey.encrypt(&secrets)?);
+        pubkey.encrypt(&mut binary, &secrets)?;
     }
+    binary.add_byte(0);
 
-    let ciphertext = aead::seal(message, Some(binary.bytes()), &nonce, &key);
+    let ciphertext = aead::seal(message, Some(binary.as_ref()), &nonce, &key);
     binary.add_bytes(&ciphertext);
 
-    Ok(pem_encap(binary.bytes(), PREFIX, SUFFIX))
-}
-
-pub struct Buf(Vec<u8>);
-
-impl Buf {
-    pub fn new() -> Self {
-        Buf(Vec::new())
-    }
-
-    pub fn bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    pub fn add_bytes(&mut self, bytes: &[u8]) {
-        self.0.extend_from_slice(bytes);
-    }
-
-    pub fn add_u32(&mut self, n: u32) {
-        self.add_bytes(&n.to_be_bytes());
-    }
-
-    pub fn add_string(&mut self, string: &[u8]) {
-        self.add_u32(string.len() as u32);
-        self.add_bytes(string);
-    }
+    Ok(pem_encap(binary.as_ref(), PEM_LABEL))
 }
 
 #[cfg(test)]
@@ -226,12 +213,12 @@ mod test {
         let sec_one = parse_secret_key(SECRET_ONE, askpass()).unwrap();
         let sec_two = parse_secret_key(SECRET_TWO, askpass()).unwrap();
         let dec_zero = decrypt(&sec_zero, &encrypted);
-        let dec_one = decrypt(&sec_one, &encrypted).unwrap();
-        let dec_two = decrypt(&sec_two, &encrypted).unwrap();
+        let (_, dec_one) = decrypt(&sec_one, &encrypted).unwrap();
+        let (_, dec_two) = decrypt(&sec_two, &encrypted).unwrap();
         assert!(dec_zero.is_err());
         assert_eq!(dec_one, MESSAGE);
         assert_eq!(dec_two, MESSAGE);
-        assert_eq!(sec_one.pubkey, recipients[0]);
-        assert_eq!(sec_two.pubkey, recipients[1]);
+        assert_eq!(sec_one.pubkey(), recipients[0]);
+        assert_eq!(sec_two.pubkey(), recipients[1]);
     }
 }

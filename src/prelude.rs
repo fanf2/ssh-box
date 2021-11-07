@@ -7,11 +7,17 @@ pub use sodiumoxide::crypto::sealedbox;
 pub use sodiumoxide::crypto::sign as ed25519;
 pub use std::collections::HashMap;
 pub use std::fmt::Write as _;
+pub use std::hash::{Hash, Hasher};
 pub use std::io::Read as _;
 pub use std::io::Write as _;
 pub use std::path::{Path, PathBuf};
+pub use std::str::from_utf8;
 
 pub use crate::askpass::*;
 pub use crate::base64::*;
+pub use crate::buf::*;
 pub use crate::pubkey::*;
 pub use crate::seckey::*;
+
+pub type Field = Vec<u8>;
+pub type Record = Vec<Field>;

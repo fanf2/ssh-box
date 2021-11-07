@@ -8,13 +8,7 @@ pub use nom::multi::*;
 pub use nom::number::complete::*;
 pub use nom::sequence::*;
 
-pub const BASE64_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
-                                  ABCDEFGHIJKLMNOPQRSTUVWXYZ\
-                                  0123456789/+=";
-
-pub const LDH_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
-                               ABCDEFGHIJKLMNOPQRSTUVWXYZ\
-                               0123456789-_";
+use nom::error::ParseError;
 
 pub type NomError<'a> = nom::error::Error<&'a [u8]>;
 pub type NomErr<'a> = nom::Err<NomError<'a>>;
@@ -50,7 +44,7 @@ pub fn is_utf8<'a, P>(parser: P) -> impl FnMut(&'a [u8]) -> Result<'a, &'a str>
 where
     P: FnMut(&'a [u8]) -> Result<'a, &'a [u8]>,
 {
-    map_res(parser, std::str::from_utf8)
+    map_res(parser, from_utf8)
 }
 
 // RFC 7468 `W` space: HT, LF, VT, FF, CR, SP
@@ -66,24 +60,25 @@ pub fn is_space(input: &[u8]) -> Result<&[u8]> {
     take_while1(space_char)(input)
 }
 
-pub fn is_ldh(input: &[u8]) -> Result<&str> {
-    is_utf8(is_a(LDH_CHARS))(input)
-}
-
-pub fn is_base64(input: &[u8]) -> Result<Vec<u8>> {
-    map_res(is_a(BASE64_CHARS), base64_decode)(input)
-}
-
 pub fn be_u32_is<'a>(wanted: u32) -> impl FnMut(&'a [u8]) -> Result<'a, u32> {
     verify(be_u32, move |&found| found == wanted)
+}
+
+// RFC 4250 section 4.6
+pub fn ssh_name(input: &[u8]) -> Result<&[u8]> {
+    take_while1(|ch| ch > b' ' && ch <= b'~' && ch != b',')(input)
 }
 
 pub fn ssh_string(input: &[u8]) -> Result<&[u8]> {
     length_data(be_u32)(input)
 }
 
-pub fn ssh_string_ldh(input: &[u8]) -> Result<&str> {
-    length_value(be_u32, is_ldh)(input)
+pub fn ssh_string_owned(input: &[u8]) -> Result<Vec<u8>> {
+    map(ssh_string, |s| s.to_owned())(input)
+}
+
+pub fn ssh_record(input: &[u8]) -> Result<Record> {
+    many1(ssh_string_owned)(input)
 }
 
 pub fn ssh_string_tag<'a>(
@@ -92,10 +87,12 @@ pub fn ssh_string_tag<'a>(
     length_value(be_u32, is_utf8(tag(word.as_bytes())))
 }
 
-pub fn ssh_pubkey(input: &[u8]) -> Result<PublicKey> {
-    map(consumed(terminated(ssh_string_ldh, rest)), PublicKey::from)(input)
-}
-
-pub fn ssh_string_pubkey(input: &[u8]) -> Result<PublicKey> {
-    map_parser(ssh_string, ssh_pubkey)(input)
+pub fn seckey_padding(input: &[u8]) -> Result<()> {
+    for (i, &c) in input.iter().enumerate() {
+        if c != 1 + i as u8 {
+            let e = nom::error::ErrorKind::Tag;
+            return Err(nom::Err::Error(NomError::from_error_kind(input, e)));
+        }
+    }
+    Ok((&input[input.len()..], ()))
 }

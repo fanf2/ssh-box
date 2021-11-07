@@ -4,6 +4,7 @@ use getopts::Options;
 
 mod askpass;
 mod base64;
+mod buf;
 mod nom;
 mod prelude;
 mod pubkey;
@@ -64,7 +65,7 @@ fn main() -> Result<()> {
         let askpass = askpass::for_file(&key_file);
         let seckey = read_secret_key(&key_file, askpass)?;
         let (input, output) = args_in_out(&matches.free)?;
-        let cleartext = sshbox::decrypt(&seckey, &input)?;
+        let (_, cleartext) = sshbox::decrypt(&seckey, &input)?;
         output.write(&cleartext)?;
     } else if matches.opt_present("e") {
         let recipients = read_public_keys(&rcpt_file)?;
