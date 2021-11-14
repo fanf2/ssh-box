@@ -1,0 +1,428 @@
+.Dd November 14, 2021
+.Dt SSH-BOX 5
+.Os SSH-BOX Pq 5
+.Sh NAME
+.Nm ssh-box
+.Nd encrypted file format
+.\" ----------------------------------------------------------------
+.Sh DESCRIPTION
+A file encrypted by
+.Nm
+is represented as PEM-encapsulated binary data.
+The binary consists of a mostly-cleartext header,
+followed by the ciphertext of the encrypted file.
+.Pp
+The header can contain user-defined metatada about the file
+and the list of public keys that were used to encrypt the file.
+The owner of a corresponding private key can decrypt a blob in the
+header that contains the symmetric key to decrypt the file itself.
+.Pp
+An
+.Nm
+encrypted file is self-contained.
+Anyone who has a private key that is able to decrypt the file
+can recover all the inputs that were used to encrypt the file.
+.Pp
+See
+.Sx Data representation
+below for details of the types used in the following subsections.
+.\" ----------------------------------------------------------------
+.Ss PEM encapsulation
+The binary header and encrypted file are base64-encoded
+and delimited by prefix and suffix lines with the label
+.Ql SSH-BOX ENCRYPTED FILE ,
+as described in RFC 7468.
+For example,
+.Bd -literal
+-----BEGIN SSH-BOX ENCRYPTED FILE-----
+c3NoLWJveC12MQAAAAABAAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O
+4SBvM4uWlCN+Fs8PAAAAAmVnAAAAaKZcNtnpfC0VwHKA2EX/s7zNyuSraWc9xGVmpYJqeKMC
+Py10Oi9sXUN/Q4Kk9aNvbSXVaXQz76Q94cGT89pPx/lD5QusSNxmc8F1PmaGlakDwinczXT7
+JDoDtw/CJDXQ7qdnt/OVDnTRDakxZU+eGgRVMeiwAgkzphgDXFN0IXvW
+-----END SSH-BOX ENCRYPTED FILE-----
+.Ed
+.Pp
+An
+.Nm
+file should be generated according to the
+.Ql stricttextualmsg
+syntax,
+and it should be parsed according to the
+.Ql laxtextualmsg
+syntax,
+as described in RFC 7468 section 3.
+.\" ----------------------------------------------------------------
+.Ss Encryption
+The encrypted file's ciphertext follows immediately after the
+.Nm
+header.
+The file is
+encrypted using the
+.Sy libsodium
+function
+.Fn crypto_aead_xchacha20poly1305_ietf_encrypt ,
+with the file's contents as the message,
+and the
+.Nm
+header as the additional data.
+.Pp
+The XChaCha20-Poly1305 AEAD construction also requires a nonce and key,
+which are laid out with the following structure
+and encrypted using each recipient public key,
+before being included in the
+.Nm
+header.
+.Pp
+.Bl -tag -offset 0p -width 0p
+.It Sy secrets :
+.El
+.Bl -column -offset indent -------- ----------------------------
+.It Vt byte Ns Bo 24 Bc Ta Va nonce
+.It Vt byte Ns Bo 32 Bc Ta Va key
+.El
+.\" ----------------------------------------------------------------
+.Ss Header structure
+The header of an
+.Nm
+encrypted file
+consists of a file format identifier
+followed by any number of header items.
+.Pp
+The format identifier is a URL pointing to this specification,
+terminated by a zero byte.
+.Pp
+.Bl -tag -offset 0p -width 0p
+.It Sy header :
+.El
+.Bl -column -offset indent -------- ----------------------------
+.It Vt byte Ns Bo Bc Ta Do Li https://dotat.at/prog/ssh-box/v1\e0 Dc
+.It Va item Ta
+.It Va item Ta
+.It ... Ta
+.It Vt byte Ta equal to zero
+.El
+.Pp
+Each
+.Va item
+starts with a
+.Vt byte
+containing a count of the number of
+.Vt string
+fields in the item.
+The list of items,
+and the whole header,
+is terminated by an item
+whose count byte is zero.
+.Pp
+Following its count
+.Vt byte ,
+an
+.Va item
+contains that many
+.Vt string
+fields.
+The first field is a
+.Vt name
+indicating the type of the item.
+The number of fields that are required in an item,
+and the contents of those fields,
+depends on the first
+.Va type
+field.
+.Pp
+.Bl -tag -offset 0p -width 0p
+.It Sy item :
+.El
+.Bl -column -offset indent -------- -------- ------------------------
+.It Vt byte Ta Va count Ta Va count No is at least one
+.It Vt name Ta Va type Ta
+.It Vt string Ta
+.It ... Ta Ta item has Va count No strings including the Va type
+.El
+.\" ----------------------------------------------------------------
+.Ss Recipient items
+In general,
+a recipient in an
+.Nm
+header is represented by
+their
+.Cm ssh
+public key;
+a comment,
+like those in an
+.Pa authorized_keys
+file;
+and a blob,
+encrypted using the public key,
+containing the AEAD
+.Sy secrets
+used for bulk file
+.Sx Encryption .
+.Pp
+.Bl -tag -offset 0p -width 0p
+.It Sy recipient :
+.El
+.Bl -column -offset indent -------- -------- ------------------------
+.It Vt byte Ta Va count Ta
+.It Vt name Ta Va type Ta public key format identifier
+.It Vt string Ta ... Ta public key fields
+.It Vt utf8 Ta Va comment Ta
+.It Vt string Ta Va blob Ta encrypted secrets
+.El
+.Pp
+The
+.Va comment
+and
+.Va blob
+fields must be ignored when comparing a recipient field
+to a public key.
+The
+.Va type
+and all public key fields should be equal for the keys to match.
+.Pp
+When an
+.Nm
+header contains multiple recipient items
+matching the user's public key,
+a decryption utility should try to decrypt with all of them,
+and not give up at the first failure.
+.\" ----------------------------------------------------------------
+.Ss So ssh-rsa Sc item
+The
+.Ql ssh-rsa
+public key format is described in RFC 4253 section 6.6.
+.Pp
+The AEAD
+.Sy secrets
+are encrypted using RSAES-OAEP
+with MFG1 and SHA-256,
+and the label
+.Ql ssh-box-v1-rsa-oaep .
+RSAES-OAEP is described in RFC 8017.
+.Pp
+.Bl -column -offset indent -------- -------- ------------------------
+.It Vt byte Ta 5 Ta
+.It Vt name Ta Do Li ssh-rsa Dc Ta
+.It Vt mpint Ta Va e Ta public exponent
+.It Vt mpint Ta Va n Ta public modulus
+.It Vt utf8 Ta Va comment Ta
+.It Vt string Ta Va blob Ta encrypted secrets
+.El
+.\" ----------------------------------------------------------------
+.Ss So ssh-ed25519 Sc item
+The
+.Ql ssh-ed25519
+public key format is described in RFC 8709 section 4.
+.Pp
+Each ssh-ed25519 recipient public key is converted using the
+.Sy libsodium
+function
+.Fn crypto_sign_ed25519_pk_to_curve25519
+and the resulting key is used to encrypt the AEAD
+.Sy secrets
+using the
+.Sy libsodium
+function
+.Fn crypto_box_seal .
+(Ed25519 keys are for signatures;
+Curve25519 keys are for encryption.)
+.Pp
+.Bl -column -offset indent -------- ------------ --------------------
+.It Vt byte Ta 4 Ta
+.It Vt name Ta Do Li ssh-ed25519 Dc Ta
+.It Vt string Ns Bo 32 Bc Ta Va key Ta
+.It Vt utf8 Ta Va comment Ta
+.It Vt string Ta Va blob Ta encrypted secrets
+.El
+.\" ----------------------------------------------------------------
+.Ss So label Sc item
+The
+.Ql label
+on an
+.Nm
+is arbitrary application-defined public metadata
+describing the encrypted contents of the file.
+For example,
+if the box contains a password,
+the label might be a JSON object
+containing the corresponding username
+and the URL of the login form.
+.Pp
+The label is unencrypted cleartext,
+so that you can find out what a file is for
+even without a decryption key.
+The label (and the rest of the header)
+is authenticated,
+so if you do have a decryption key,
+you can be sure the label has not been tampered with.
+.Pp
+.Bl -column -offset indent -------- ------------ --------------------
+.It Vt byte Ta 2 Ta
+.It Vt name Ta Do Li label Dc Ta
+.It Vt string Ta Va contents Ta
+.El
+.Pp
+When an
+.Nm
+header contains multiple
+.Ql label
+items,
+the complete contents of the label
+should be constructed by concatenating the
+.Va contents
+of every
+.Ql label
+item, in the same order as they appear in the
+.Nm
+header, without any framing.
+.\" ----------------------------------------------------------------
+.Ss Compatibility
+A program must not fail to read an
+.Nm
+encrypted file
+because its header contains an
+.Va item
+with an unknown
+.Va type .
+.Pp
+A program that is generating or manipulating an
+.Nm
+encrypted file
+must not include any header
+.Va item
+that it does not understand.
+(In particular,
+it must not carelessly copy items from one
+.Nm
+header to another.)
+.Pp
+Any file with a different PEM encapsulation label or a different
+format identifier is not covered by this spec.
+.\" ----------------------------------------------------------------
+.Ss Data representation
+The
+.Nm
+header is based on data types and structures used by SSH,
+as described in RFC 4251 section 5, and as follows:
+.Bl -tag -width indent
+.It Vt byte
+An arbitrary 8-bit value (octet).
+.It Vt byte Ns Bq Va n
+Fixed length data represented as an array of bytes,
+where
+.Va n
+is the number of bytes in the array.
+The length
+.Va n
+can be omitted when it is implied by the contents of the array.
+.It Vt uint32
+A 32-bit unsigned integer,
+represented as four bytes in network byte order
+(big-endian, decreasing order of significance).
+.It Vt string
+An arbitrary length binary string,
+represented as a
+.Vt uint32
+containing the string's length
+(the number of bytes that follow),
+then zero (= empty string) or more
+bytes that are the contents of the string.
+.El
+.Pp
+There are a few kinds of field that have the same representation as a
+.Vt string
+but whose contents have a particular purpose,
+or a restricted syntax.
+.Bl -tag -width indent
+.It Vt mpint
+A
+.Vt string
+containing a multiple precision integer
+in two's complement big-endian format.
+.It Vt utf8
+A
+.Vt string
+containing human-readable text encoded in UTF-8.
+.It Vt string Ns Bq Va n
+A
+.Vt string
+containing fixed-length binary data.
+The difference between a
+.Vt string Ns Bq Va n
+and
+.Vt byte Ns Bq Va n
+is that a
+.Vt string Ns Bq Va n
+has a
+.Vt uint32
+length prefix and a
+.Vt byte Ns Bq Va n
+does not.
+.It Vt name
+A
+.Vt string
+containing a keyword that follows the
+.Dq Conventions for Names
+in RFC 4250 section 4.6.1.
+.Pp
+Standard names consist of ASCII characters
+with codes between 33 and 126 (inclusive),
+excluding
+.Ql ","
+(ASCII 44)
+and
+.Ql @
+(ASCII 64).
+.Pp
+Non-standard extensions can use names of the form
+.Ql Va name Ns Li @ Ns Va domain .
+.El
+.\" ----------------------------------------------------------------
+.Sh FILES
+.\" ----------------------------------------------------------------
+.Sh SEE ALSO
+.Xr ssh-box 1 ,
+.Xr ssh-keygen 1
+.Pp
+.Lk https://dotat.at/prog/ssh-box/ "The ssh-box web page"
+.\" ----------------------------------------------------------------
+.Sh STANDARDS
+.Rs
+.%R RFC 4250
+.%T The Secure Shell (SSH) Protocol Assigned Numbers
+.%U https://www.rfc-editor.org/rfc/rfc4250
+.Re
+.Pp
+.Rs
+.%R RFC 4251
+.%T The Secure Shell (SSH) Protocol Architecture
+.%U https://www.rfc-editor.org/rfc/rfc4251
+.Re
+.Pp
+.Rs
+.%R RFC 4253
+.%T The Secure Shell (SSH) Transport Layer Protocol
+.%U https://www.rfc-editor.org/rfc/rfc4253
+.Re
+.Pp
+.Rs
+.%R RFC 7468
+.%T Textual Encodings of PKIX, PKCS, and CMS Structures
+.%U https://www.rfc-editor.org/rfc/rfc7468
+.Re
+.Pp
+.Rs
+.%R RFC 8017
+.%T PKCS #1: RSA Cryptography Specifications Version 2.2
+.%U https://www.rfc-editor.org/rfc/rfc8017
+.Re
+.Pp
+.Rs
+.%R RFC 8709
+.%T Ed25519 and Ed448 Public Key Algorithms for the Secure Shell (SSH) Protocol
+.%U https://www.rfc-editor.org/rfc/rfc4251
+.Re
+.\" ----------------------------------------------------------------
+.Sh AUTHORS
+.An Tony Finch Aq dot@dotat.at
+.\" ----------------------------------------------------------------

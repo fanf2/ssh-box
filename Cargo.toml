@@ -3,6 +3,7 @@ name = "ssh-box"
 version = "0.0.0"
 authors = ["Tony Finch <dot@dotat.at>"]
 edition = "2021"
+default-run = "ssh-box"
 
 [dependencies]
 aes = { version = "~0", features = ["ctr"] }
