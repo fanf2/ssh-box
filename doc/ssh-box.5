@@ -14,7 +14,7 @@ followed by the ciphertext of the encrypted file.
 .Pp
 The header can contain user-defined metatada about the file
 and the list of public keys that were used to encrypt the file.
-The owner of a corresponding private key can decrypt a blob in the
+A recipient who owns a corresponding private key can decrypt a blob in the
 header that contains the symmetric key to decrypt the file itself.
 .Pp
 An
@@ -52,7 +52,7 @@ and it should be parsed according to the
 syntax,
 as described in RFC 7468 section 3.
 .\" ----------------------------------------------------------------
-.Ss Encryption
+.Ss AEAD Encryption
 The encrypted file's ciphertext follows immediately after the
 .Nm
 header.
@@ -67,12 +67,11 @@ and the
 header as the additional data.
 .Pp
 The XChaCha20-Poly1305 AEAD construction also requires a nonce and key,
-which are laid out with the following structure
+which are laid out with the following fixed-size structure
 and encrypted using each recipient public key,
 before being included in the
 .Nm
 header.
-.Pp
 .Bl -tag -offset 0p -width 0p
 .It Sy secrets :
 .El
@@ -91,17 +90,6 @@ followed by any number of header items.
 The format identifier is a URL pointing to this specification,
 terminated by a zero byte.
 .Pp
-.Bl -tag -offset 0p -width 0p
-.It Sy header :
-.El
-.Bl -column -offset indent -------- ----------------------------
-.It Vt byte Ns Bo Bc Ta Do Li https://dotat.at/prog/ssh-box/v1\e0 Dc
-.It Va item Ta
-.It Va item Ta
-.It ... Ta
-.It Vt byte Ta equal to zero
-.El
-.Pp
 Each
 .Va item
 starts with a
@@ -113,6 +101,16 @@ The list of items,
 and the whole header,
 is terminated by an item
 whose count byte is zero.
+.Bl -tag -offset 0p -width 0p
+.It Sy header :
+.El
+.Bl -column -offset indent -------- ----------------------------
+.It Vt byte Ns Bo Bc Ta Do Li https://dotat.at/prog/ssh-box/v1\e0 Dc
+.It Va item Ta
+.It Va item Ta
+.It ... Ta
+.It Vt byte Ta equal to zero
+.El
 .Pp
 Following its count
 .Vt byte ,
@@ -129,14 +127,13 @@ and the contents of those fields,
 depends on the first
 .Va type
 field.
-.Pp
 .Bl -tag -offset 0p -width 0p
 .It Sy item :
 .El
 .Bl -column -offset indent -------- -------- ------------------------
 .It Vt byte Ta Va count Ta Va count No is at least one
 .It Vt name Ta Va type Ta
-.It Vt string Ta
+.It Vt string Ta Ta
 .It ... Ta Ta item has Va count No strings including the Va type
 .El
 .\" ----------------------------------------------------------------
@@ -148,17 +145,16 @@ header is represented by
 their
 .Cm ssh
 public key;
-a comment,
+and a comment,
 like those in an
 .Pa authorized_keys
 file;
 and a blob,
 encrypted using the public key,
-containing the AEAD
+containing the
 .Sy secrets
-used for bulk file
-.Sx Encryption .
-.Pp
+used for
+.Sx AEAD Encryption .
 .Bl -tag -offset 0p -width 0p
 .It Sy recipient :
 .El
@@ -199,7 +195,6 @@ with MFG1 and SHA-256,
 and the label
 .Ql ssh-box-v1-rsa-oaep .
 RSAES-OAEP is described in RFC 8017.
-.Pp
 .Bl -column -offset indent -------- -------- ------------------------
 .It Vt byte Ta 5 Ta
 .It Vt name Ta Do Li ssh-rsa Dc Ta
@@ -213,8 +208,17 @@ RSAES-OAEP is described in RFC 8017.
 The
 .Ql ssh-ed25519
 public key format is described in RFC 8709 section 4.
+Ed25519 keys are for signatures and authentication;
+for encryption and decryption the key must be converted to curve25519,
+but note that
+.Nm
+always stores keys in
+.Ql ssh-ed25519
+form.
 .Pp
-Each ssh-ed25519 recipient public key is converted using the
+Each
+.Ql ssh-ed25519
+recipient public key is converted using the
 .Sy libsodium
 function
 .Fn crypto_sign_ed25519_pk_to_curve25519
@@ -224,9 +228,13 @@ using the
 .Sy libsodium
 function
 .Fn crypto_box_seal .
-(Ed25519 keys are for signatures;
-Curve25519 keys are for encryption.)
 .Pp
+Decryption uses the
+.Sy libsodium
+functions
+.Fn crypto_sign_ed25519_sk_to_curve25519
+and
+.Fn crypto_box_seal_open .
 .Bl -column -offset indent -------- ------------ --------------------
 .It Vt byte Ta 4 Ta
 .It Vt name Ta Do Li ssh-ed25519 Dc Ta
@@ -255,7 +263,6 @@ The label (and the rest of the header)
 is authenticated,
 so if you do have a decryption key,
 you can be sure the label has not been tampered with.
-.Pp
 .Bl -column -offset indent -------- ------------ --------------------
 .It Vt byte Ta 2 Ta
 .It Vt name Ta Do Li label Dc Ta
@@ -378,13 +385,94 @@ Non-standard extensions can use names of the form
 .Ql Va name Ns Li @ Ns Va domain .
 .El
 .\" ----------------------------------------------------------------
+.Sh SECURITY CONSIDERATIONS
+It is generally considered to be a bad idea to use the same key pair
+for signing and encryption.
+SSH key pairs are normally used
+for signing (i.e for authentication),
+but
+.Nm
+repurposes them as encryption keys.
+.Pp
+The risk with this kind of reuse is that it opens you up to
+cross-protocol attacks,
+where one protocol is used to gain access to a
+signing or encryption oracle that allows you to break the other
+protocol.
+.Pp
+Another tool that re-uses ssh keys for encryption is
+.Ic age .
+The
+.Ql age-encryption
+format specification argues that key reuse is safe with
+.Ic age Ns 's
+tweaked curve25519 scheme.
+In
+.Nm ,
+there is no additional tweak of the curve25519 keys,
+because of
+.Nm Ns 's
+goal to use off-the-shelf cryptographic constructions.
+.Pp
+You can also use RSA keys with
+.Ic age ,
+but its spec doesn't explain why this use of RSA is safe.
+Both
+.Ic age
+and
+.Nm
+use RSAES-OAEP,
+whereas ssh uses PKCS #1 v1.5.
+This difference may reduce the risk of cross-protocol attacks.
+.Ss Keeping clean
+To reduce risks, you can:
+.Bl -bullet -width 2n
+.It
+Generate ssh keys exclusively for use with
+.Nm ,
+separate from the ssh keys you use for authentication.
+.It
+Never use
+.Nm
+with ssh host keys,
+because ssh host authentication allows an attacker
+to provoke private key operations
+much more easily than user authentication.
+.El
+.\" ----------------------------------------------------------------
 .Sh FILES
+Given an unencrypted cleartext file,
+.Dl EXAMPLE
+its
+.Nm
+encrypted version is conventionally called
+.Dl EXAMPLE.box
+and its detached label is called
+.Dl EXAMPLE.label
+.Pp
+See
+.Xr ssh-box 1
+for more details of the files it uses.
 .\" ----------------------------------------------------------------
 .Sh SEE ALSO
 .Xr ssh-box 1 ,
 .Xr ssh-keygen 1
 .Pp
 .Lk https://dotat.at/prog/ssh-box/ "The ssh-box web page"
+.Pp
+.Lk https://libsodium.gitbook.io/ "Libsodium documentation"
+.br
+specifically the sections on:
+.Bl -bullet -width 2n
+.It
+.Lk https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction XChaCha20-Poly1305
+.It
+.Lk https://libsodium.gitbook.io/doc/public-key_cryptography/sealed_boxes "Sealed boxes"
+.It
+.Lk https://libsodium.gitbook.io/doc/advanced/ed25519-curve25519 "Ed25519 to Curve25519"
+.El
+.Pp
+.Lk https://age-encryption.org/v1 "age-encryption format specification"
 .\" ----------------------------------------------------------------
 .Sh STANDARDS
 .Rs
@@ -422,6 +510,20 @@ Non-standard extensions can use names of the form
 .%T Ed25519 and Ed448 Public Key Algorithms for the Secure Shell (SSH) Protocol
 .%U https://www.rfc-editor.org/rfc/rfc4251
 .Re
+.\" ----------------------------------------------------------------
+.Sh CAVEATS
+This specification is written in terms of several
+.Sy libsodium
+functions.
+The aim is to use the best available misuse-resistant
+high-level cryptographic functions,
+and avoid being too clever.
+It would be better to have a description of what these functions do,
+in enough detail that an expert would be able
+to write an alternative implementation.
+However the
+.Sy libsodium
+documentation and source code do not cite any specifications.
 .\" ----------------------------------------------------------------
 .Sh AUTHORS
 .An Tony Finch Aq dot@dotat.at
