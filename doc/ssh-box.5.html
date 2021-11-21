@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <link rel="stylesheet" href="mandoc.css" type="text/css" media="all"/>
+  <link rel="stylesheet" href="fanf.css" type="text/css" media="all"/>
+  <title>ssh-box: use ssh keys to encrypt files</title>
+</head>
+<body>
+  <header>
+    <h1>
+      <a href="https://dotat.at/prog/ssh-box/">
+	<img src="https://dotat.at/graphics/dotat-32.png" alt="dotat">
+	<tt>ssh-box</tt>: use ssh keys to encrypt files
+      </a>
+    </h1>
+  </header>
+<table class="head">
+  <tr>
+    <td class="head-ltitle">SSH-BOX(5)</td>
+    <td class="head-vol">File Formats Manual</td>
+    <td class="head-rtitle">SSH-BOX(5)</td>
+  </tr>
+</table>
+<div class="manual-text">
+<section class="Sh">
+<h1 class="Sh" id="NAME"><a class="permalink" href="#NAME">NAME</a></h1>
+<p class="Pp"><code class="Nm">ssh-box</code> &#x2014;
+    <span class="Nd">encrypted file format</span></p>
+</section>
+<section class="Sh">
+<h1 class="Sh" id="DESCRIPTION"><a class="permalink" href="#DESCRIPTION">DESCRIPTION</a></h1>
+<p class="Pp">A file encrypted by <code class="Nm">ssh-box</code> is represented
+    as PEM-encapsulated binary data. The binary consists of a mostly-cleartext
+    header, followed by the ciphertext of the encrypted file.</p>
+<p class="Pp">The header can contain user-defined metatada about the file and
+    the list of public keys that were used to encrypt the file. A recipient who
+    owns a corresponding private key can decrypt a blob in the header that
+    contains the symmetric key to decrypt the file itself.</p>
+<p class="Pp">An <code class="Nm">ssh-box</code> encrypted file is
+    self-contained. Anyone who has a private key that is able to decrypt the
+    file can recover all the inputs that were used to encrypt the file.</p>
+<p class="Pp">See <a class="Sx" href="#Data_representation">Data
+    representation</a> below for details of the types used in the following
+    subsections.</p>
+<section class="Ss">
+<h2 class="Ss" id="PEM_encapsulation"><a class="permalink" href="#PEM_encapsulation">PEM
+  encapsulation</a></h2>
+<p class="Pp">The binary header and encrypted file are base64-encoded and
+    delimited by prefix and suffix lines with the label
+    &#x2018;<code class="Li">SSH-BOX ENCRYPTED FILE</code>&#x2019;, as described
+    in RFC 7468. For example,</p>
+<div class="Bd Pp Li">
+<pre>-----BEGIN SSH-BOX ENCRYPTED FILE-----
+c3NoLWJveC12MQAAAAABAAAAC3NzaC1lZDI1NTE5AAAAIHRE3hd+N+jMlLuQsnB/IozFl/5O
+4SBvM4uWlCN+Fs8PAAAAAmVnAAAAaKZcNtnpfC0VwHKA2EX/s7zNyuSraWc9xGVmpYJqeKMC
+Py10Oi9sXUN/Q4Kk9aNvbSXVaXQz76Q94cGT89pPx/lD5QusSNxmc8F1PmaGlakDwinczXT7
+JDoDtw/CJDXQ7qdnt/OVDnTRDakxZU+eGgRVMeiwAgkzphgDXFN0IXvW
+-----END SSH-BOX ENCRYPTED FILE-----</pre>
+</div>
+<p class="Pp">An <code class="Nm">ssh-box</code> file should be generated
+    according to the &#x2018;<code class="Li">stricttextualmsg</code>&#x2019;
+    syntax, and it should be parsed according to the
+    &#x2018;<code class="Li">laxtextualmsg</code>&#x2019; syntax, as described
+    in RFC 7468 section 3.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id="AEAD_Encryption"><a class="permalink" href="#AEAD_Encryption">AEAD
+  Encryption</a></h2>
+<p class="Pp">The encrypted file's ciphertext follows immediately after the
+    <code class="Nm">ssh-box</code> header. The file is encrypted using the
+    <b class="Sy">libsodium</b> function
+    <a class="permalink" href="#crypto_aead_xchacha20poly1305_ietf_encrypt"><code class="Fn" id="crypto_aead_xchacha20poly1305_ietf_encrypt">crypto_aead_xchacha20poly1305_ietf_encrypt</code></a>(),
+    with the file's contents as the message, and the
+    <code class="Nm">ssh-box</code> header as the additional data.</p>
+<p class="Pp">The XChaCha20-Poly1305 AEAD construction also requires a nonce and
+    key, which are laid out with the following fixed-size structure and
+    encrypted using each recipient public key, before being included in the
+    <code class="Nm">ssh-box</code> header.</p>
+<div class="Bd-indent">
+<dl class="Bl-tag">
+  <dt id="secrets"><a class="permalink" href="#secrets"><b class="Sy">secrets</b></a>:</dt>
+  <dd style="width: auto;">&#x00A0;</dd>
+</dl>
+</div>
+<table class="Bl-column Bd-indent">
+  <tr id="nonce">
+    <td><var class="Vt">byte</var>[24]</td>
+    <td><var class="Va">nonce</var></td>
+  </tr>
+  <tr id="key">
+    <td><var class="Vt">byte</var>[32]</td>
+    <td><var class="Va">key</var></td>
+  </tr>
+</table>
+</section>
+<section class="Ss">
+<h2 class="Ss" id="Header_structure"><a class="permalink" href="#Header_structure">Header
+  structure</a></h2>
+<p class="Pp">The header of an <code class="Nm">ssh-box</code> encrypted file
+    consists of a file format identifier followed by any number of header
+  items.</p>
+<p class="Pp">The format identifier is a URL pointing to this specification,
+    terminated by a zero byte.</p>
+<p class="Pp">Each <var class="Va">item</var> starts with a
+    <var class="Vt">byte</var> containing a count of the number of
+    <var class="Vt">string</var> fields in the item. The list of items, and the
+    whole header, is terminated by an item whose count byte is zero.</p>
+<div class="Bd-indent">
+<dl class="Bl-tag">
+  <dt id="header"><a class="permalink" href="#header"><b class="Sy">header</b></a>:</dt>
+  <dd style="width: auto;">&#x00A0;</dd>
+</dl>
+</div>
+<table class="Bl-column Bd-indent">
+  <tr>
+    <td><var class="Vt">byte</var>[]</td>
+    <td>&#x201C;<code class="Li">https://dotat.at/prog/ssh-box/v1\0</code>&#x201D;</td>
+  </tr>
+  <tr id="item">
+    <td><var class="Va">item</var></td>
+    <td></td>
+  </tr>
+  <tr id="item~2">
+    <td><var class="Va">item</var></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>...</td>
+    <td></td>
+  </tr>
+  <tr>
+    <td><var class="Vt">byte</var></td>
+    <td>equal to zero</td>
+  </tr>
+</table>
+<p class="Pp">Following its count <var class="Vt">byte</var>, an
+    <var class="Va">item</var> contains that many <var class="Vt">string</var>
+    fields. The first field is a <var class="Vt">name</var> indicating the type
+    of the item. The number of fields that are required in an item, and the
+    contents of those fields, depends on the first <var class="Va">type</var>
+    field.</p>
+<div class="Bd-indent">
+<dl class="Bl-tag">
+  <dt id="item~3"><a class="permalink" href="#item~3"><b class="Sy">item</b></a>:</dt>
+  <dd style="width: auto;">&#x00A0;</dd>
+</dl>
+</div>
+<table class="Bl-column Bd-indent">
+  <tr id="count">
+    <td><var class="Vt">byte</var></td>
+    <td><var class="Va">count</var></td>
+    <td><var class="Va">count</var> <span class="No">is at least one</span></td>
+  </tr>
+  <tr id="type">
+    <td><var class="Vt">name</var></td>
+    <td><var class="Va">type</var></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td><var class="Vt">string</var></td>
+    <td></td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>...</td>
+    <td></td>
+    <td>item has <var class="Va">count</var> <span class="No">strings including
+      the</span> <var class="Va">type</var></td>
+  </tr>
+</table>
+</section>
+<section class="Ss">
+<h2 class="Ss" id="Recipient_items"><a class="permalink" href="#Recipient_items">Recipient
+  items</a></h2>
+<p class="Pp">In general, a recipient in an <code class="Nm">ssh-box</code>
+    header is represented by their <code class="Cm">ssh</code> public key; and a
+    comment, like those in an <span class="Pa">authorized_keys</span> file; and
+    a blob, encrypted using the public key, containing the
+    <b class="Sy">secrets</b> used for
+    <a class="Sx" href="#AEAD_Encryption">AEAD Encryption</a>.</p>
+<div class="Bd-indent">
+<dl class="Bl-tag">
+  <dt id="recipient"><a class="permalink" href="#recipient"><b class="Sy">recipient</b></a>:</dt>
+  <dd style="width: auto;">&#x00A0;</dd>
+</dl>
+</div>
+<table class="Bl-column Bd-indent">
+  <tr id="count~2">
+    <td><var class="Vt">byte</var></td>
+    <td><var class="Va">count</var></td>
+    <td></td>
+  </tr>
+  <tr id="type~2">
+    <td><var class="Vt">name</var></td>
+    <td><var class="Va">type</var></td>
+    <td>public key format identifier</td>
+  </tr>
+  <tr>
+    <td><var class="Vt">string</var></td>
+    <td>...</td>
+    <td>public key fields</td>
+  </tr>
+  <tr id="comment">
+    <td><var class="Vt">utf8</var></td>
+    <td><var class="Va">comment</var></td>
+    <td></td>
+  </tr>
+  <tr id="blob">
+    <td><var class="Vt">string</var></td>
+    <td><var class="Va">blob</var></td>
+    <td>encrypted secrets</td>
+  </tr>
+</table>
+<p class="Pp">The <var class="Va">comment</var> and <var class="Va">blob</var>
+    fields must be ignored when comparing a recipient item to a public key. The
+    <var class="Va">type</var> and all public key fields should be equal for the
+    keys to match.</p>
+<p class="Pp">When an <code class="Nm">ssh-box</code> header contains multiple
+    recipient items matching the user's public key, a decryption utility should
+    try to decrypt with all of them, and not give up at the first failure.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id="ssh-rsa_item"><a class="permalink" href="#ssh-rsa_item">&#x2018;ssh-rsa&#x2019;
+  item</a></h2>
+<p class="Pp">The &#x2018;<code class="Li">ssh-rsa</code>&#x2019; public key
+    format is described in RFC 4253 section 6.6.</p>
+<p class="Pp">The AEAD <b class="Sy">secrets</b> are encrypted using RSAES-OAEP
+    with MFG1 and SHA-256, and the label
+    &#x2018;<code class="Li">ssh-box-v1-rsa-oaep</code>&#x2019;. RSAES-OAEP is
+    described in RFC 8017.</p>
+<table class="Bl-column Bd-indent">
+  <tr>
+    <td><var class="Vt">byte</var></td>
+    <td>5</td>
+    <td></td>
+  </tr>
+  <tr>
+    <td><var class="Vt">name</var></td>
+    <td>&#x201C;<code class="Li">ssh-rsa</code>&#x201D;</td>
+    <td></td>
+  </tr>
+  <tr id="e">
+    <td><var class="Vt">mpint</var></td>
+    <td><var class="Va">e</var></td>
+    <td>public exponent</td>
+  </tr>
+  <tr id="n">
+    <td><var class="Vt">mpint</var></td>
+    <td><var class="Va">n</var></td>
+    <td>public modulus</td>
+  </tr>
+  <tr id="comment~2">
+    <td><var class="Vt">utf8</var></td>
+    <td><var class="Va">comment</var></td>
+    <td></td>
+  </tr>
+  <tr id="blob~2">
+    <td><var class="Vt">string</var></td>
+    <td><var class="Va">blob</var></td>
+    <td>encrypted secrets</td>
+  </tr>
+</table>
+</section>
+<section class="Ss">
+<h2 class="Ss" id="ssh-ed25519_item"><a class="permalink" href="#ssh-ed25519_item">&#x2018;ssh-ed25519&#x2019;
+  item</a></h2>
+<p class="Pp">The &#x2018;<code class="Li">ssh-ed25519</code>&#x2019; public key
+    format is described in RFC 8709 section 4. Ed25519 keys are for signatures
+    and authentication; for encryption and decryption the key must be converted
+    to curve25519, but note that <code class="Nm">ssh-box</code> always stores
+    keys in &#x2018;<code class="Li">ssh-ed25519</code>&#x2019; form.</p>
+<p class="Pp" id="crypto_sign_ed25519_pk_to_curve25519">Each
+    &#x2018;<code class="Li">ssh-ed25519</code>&#x2019; recipient public key is
+    converted using the <b class="Sy">libsodium</b> function
+    <a class="permalink" href="#crypto_sign_ed25519_pk_to_curve25519"><code class="Fn">crypto_sign_ed25519_pk_to_curve25519</code></a>()
+    and the resulting key is used to encrypt the AEAD <b class="Sy">secrets</b>
+    using the <b class="Sy">libsodium</b> function
+    <a class="permalink" href="#crypto_box_seal"><code class="Fn" id="crypto_box_seal">crypto_box_seal</code></a>().</p>
+<p class="Pp" id="crypto_sign_ed25519_sk_to_curve25519">Decryption uses the
+    <b class="Sy">libsodium</b> functions
+    <a class="permalink" href="#crypto_sign_ed25519_sk_to_curve25519"><code class="Fn">crypto_sign_ed25519_sk_to_curve25519</code></a>()
+    and
+    <a class="permalink" href="#crypto_box_seal_open"><code class="Fn" id="crypto_box_seal_open">crypto_box_seal_open</code></a>().</p>
+<table class="Bl-column Bd-indent">
+  <tr>
+    <td><var class="Vt">byte</var></td>
+    <td>4</td>
+    <td></td>
+  </tr>
+  <tr>
+    <td><var class="Vt">name</var></td>
+    <td>&#x201C;<code class="Li">ssh-ed25519</code>&#x201D;</td>
+    <td></td>
+  </tr>
+  <tr id="key~2">
+    <td><var class="Vt">string</var>[32]</td>
+    <td><var class="Va">key</var></td>
+    <td></td>
+  </tr>
+  <tr id="comment~3">
+    <td><var class="Vt">utf8</var></td>
+    <td><var class="Va">comment</var></td>
+    <td></td>
+  </tr>
+  <tr id="blob~3">
+    <td><var class="Vt">string</var></td>
+    <td><var class="Va">blob</var></td>
+    <td>encrypted secrets</td>
+  </tr>
+</table>
+</section>
+<section class="Ss">
+<h2 class="Ss" id="label_item"><a class="permalink" href="#label_item">&#x2018;label&#x2019;
+  item</a></h2>
+<p class="Pp">The &#x2018;<code class="Li">label</code>&#x2019; on an
+    <code class="Nm">ssh-box</code> is arbitrary application-defined public
+    metadata describing the encrypted contents of the file. For example, if the
+    box contains a password, the label might be a JSON object containing the
+    corresponding username and the URL of the login form.</p>
+<p class="Pp">The label is unencrypted cleartext, so that you can find out what
+    a file is for even without a decryption key. The label (and the rest of the
+    header) is authenticated, so if you do have a decryption key, you can be
+    sure the label has not been tampered with.</p>
+<table class="Bl-column Bd-indent">
+  <tr>
+    <td><var class="Vt">byte</var></td>
+    <td>2</td>
+    <td></td>
+  </tr>
+  <tr>
+    <td><var class="Vt">name</var></td>
+    <td>&#x201C;<code class="Li">label</code>&#x201D;</td>
+    <td></td>
+  </tr>
+  <tr id="contents">
+    <td><var class="Vt">string</var></td>
+    <td><var class="Va">contents</var></td>
+    <td></td>
+  </tr>
+</table>
+<p class="Pp">When an <code class="Nm">ssh-box</code> header contains multiple
+    &#x2018;<code class="Li">label</code>&#x2019; items, the complete contents
+    of the label should be constructed by concatenating the
+    <var class="Va">contents</var> of every
+    &#x2018;<code class="Li">label</code>&#x2019; item, in the same order as
+    they appear in the <code class="Nm">ssh-box</code> header, without any
+    framing.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id="Compatibility"><a class="permalink" href="#Compatibility">Compatibility</a></h2>
+<p class="Pp">A program must not fail to read an <code class="Nm">ssh-box</code>
+    encrypted file because its header contains an <var class="Va">item</var>
+    with an unknown <var class="Va">type</var>.</p>
+<p class="Pp">A program that is generating or manipulating an
+    <code class="Nm">ssh-box</code> encrypted file must not include any header
+    <var class="Va">item</var> that it does not understand. (In particular, it
+    must not carelessly copy items from one <code class="Nm">ssh-box</code>
+    header to another.)</p>
+<p class="Pp">Any file with a different PEM encapsulation label or a different
+    format identifier is not covered by this spec.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id="Data_representation"><a class="permalink" href="#Data_representation">Data
+  representation</a></h2>
+<p class="Pp">The <code class="Nm">ssh-box</code> header is based on data types
+    and structures used by SSH, as described in RFC 4251 section 5, and as
+    follows:</p>
+<dl class="Bl-tag">
+  <dt><var class="Vt">byte</var></dt>
+  <dd>An arbitrary 8-bit value (octet).</dd>
+  <dt><var class="Vt">byte</var>[<var class="Va">n</var>]</dt>
+  <dd>Fixed length data represented as an array of bytes, where
+      <var class="Va">n</var> is the number of bytes in the array. The length
+      <var class="Va">n</var> can be omitted when it is implied by the contents
+      of the array.</dd>
+  <dt><var class="Vt">uint32</var></dt>
+  <dd>A 32-bit unsigned integer, represented as four bytes in network byte order
+      (big-endian, decreasing order of significance).</dd>
+  <dt><var class="Vt">string</var></dt>
+  <dd>An arbitrary length binary string, represented as a
+      <var class="Vt">uint32</var> containing the string's length (the number of
+      bytes that follow), then zero (= empty string) or more bytes that are the
+      contents of the string.</dd>
+</dl>
+<p class="Pp">There are a few kinds of field that have the same representation
+    as a <var class="Vt">string</var> but whose contents have a particular
+    purpose, or a restricted syntax.</p>
+<dl class="Bl-tag">
+  <dt><var class="Vt">mpint</var></dt>
+  <dd>A <var class="Vt">string</var> containing a multiple precision integer in
+      two's complement big-endian format.</dd>
+  <dt><var class="Vt">utf8</var></dt>
+  <dd>A <var class="Vt">string</var> containing human-readable text encoded in
+      UTF-8.</dd>
+  <dt><var class="Vt">string</var>[<var class="Va">n</var>]</dt>
+  <dd>A <var class="Vt">string</var> containing fixed-length binary data. The
+      difference between a <var class="Vt">string</var>[<var class="Va">n</var>]
+      and <var class="Vt">byte</var>[<var class="Va">n</var>] is that a
+      <var class="Vt">string</var>[<var class="Va">n</var>] has a
+      <var class="Vt">uint32</var> length prefix and a
+      <var class="Vt">byte</var>[<var class="Va">n</var>] does not.</dd>
+  <dt><var class="Vt">name</var></dt>
+  <dd>A <var class="Vt">string</var> containing a keyword that follows the
+      &#x201C;Conventions for Names&#x201D; in RFC 4250 section 4.6.1.
+    <p class="Pp">Standard names consist of ASCII characters with codes between
+        33 and 126 (inclusive), excluding
+        &#x2018;<code class="Li">,</code>&#x2019; (ASCII 44) and
+        &#x2018;<code class="Li">@</code>&#x2019; (ASCII 64).</p>
+    <p class="Pp">Non-standard extensions can use names of the form
+        &#x2018;<code class="Li"><var class="Va">name</var><code class="Li">@</code><var class="Va">domain</var></code>&#x2019;.</p>
+  </dd>
+</dl>
+</section>
+</section>
+<section class="Sh">
+<h1 class="Sh" id="SECURITY_CONSIDERATIONS"><a class="permalink" href="#SECURITY_CONSIDERATIONS">SECURITY
+  CONSIDERATIONS</a></h1>
+<p class="Pp">It is generally considered to be a bad idea to use the same key
+    pair for signing and encryption. SSH key pairs are normally used for signing
+    (i.e for authentication), but <code class="Nm">ssh-box</code> repurposes
+    them as encryption keys.</p>
+<p class="Pp">The risk with this kind of reuse is that it opens you up to
+    cross-protocol attacks, where one protocol is used to gain access to a
+    signing or encryption oracle that allows you to break the other
+  protocol.</p>
+<p class="Pp">Another tool that re-uses ssh keys for encryption is
+    <code class="Ic">age</code>. The
+    &#x2018;<code class="Li">age-encryption</code>&#x2019; format specification
+    argues that key reuse is safe with <code class="Ic">age</code>'s tweaked
+    curve25519 scheme. In <code class="Nm">ssh-box</code>, there is no
+    additional tweak of the curve25519 keys, because of
+    <code class="Nm">ssh-box</code>'s goal to use off-the-shelf cryptographic
+    constructions.</p>
+<p class="Pp">You can also use RSA keys with <code class="Ic">age</code>, but
+    its spec doesn't explain why this use of RSA is safe. Both
+    <code class="Ic">age</code> and <code class="Nm">ssh-box</code> use
+    RSAES-OAEP, whereas ssh uses PKCS #1 v1.5. This difference may reduce the
+    risk of cross-protocol attacks.</p>
+<section class="Ss">
+<h2 class="Ss" id="Keeping_clean"><a class="permalink" href="#Keeping_clean">Keeping
+  clean</a></h2>
+<p class="Pp">To reduce risks, you can:</p>
+<ul class="Bl-bullet">
+  <li>Generate ssh keys exclusively for use with
+      <code class="Nm">ssh-box</code>, separate from the ssh keys you use for
+      authentication.</li>
+  <li>Never use <code class="Nm">ssh-box</code> with ssh host keys, because ssh
+      host authentication allows an attacker to provoke private key operations
+      much more easily than user authentication.</li>
+</ul>
+</section>
+</section>
+<section class="Sh">
+<h1 class="Sh" id="FILES"><a class="permalink" href="#FILES">FILES</a></h1>
+<p class="Pp">Given an unencrypted cleartext file,</p>
+<div class="Bd Bd-indent"><code class="Li">EXAMPLE</code></div>
+its <code class="Nm">ssh-box</code> encrypted version is conventionally called
+<div class="Bd Bd-indent"><code class="Li">EXAMPLE.box</code></div>
+and its detached label is called
+<div class="Bd Bd-indent"><code class="Li">EXAMPLE.label</code></div>
+<p class="Pp">See <a class="Xr">ssh-box(1)</a> for more details of the files it
+    uses.</p>
+</section>
+<section class="Sh">
+<h1 class="Sh" id="SEE_ALSO"><a class="permalink" href="#SEE_ALSO">SEE
+  ALSO</a></h1>
+<p class="Pp"><a class="Xr">ssh-box(1)</a>, <a class="Xr">ssh-keygen(1)</a></p>
+<p class="Pp"><a class="Lk" href="https://dotat.at/prog/ssh-box/">The ssh-box
+    web page</a></p>
+<p class="Pp"><a class="Lk" href="https://libsodium.gitbook.io/">Libsodium
+    documentation</a>
+  <br/>
+  specifically the sections on:</p>
+<ul class="Bl-bullet">
+  <li><a class="Lk" href="https://libsodium.gitbook.io/doc/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction">XChaCha20-Poly1305</a></li>
+  <li><a class="Lk" href="https://libsodium.gitbook.io/doc/public-key_cryptography/sealed_boxes">Sealed
+      boxes</a></li>
+  <li><a class="Lk" href="https://libsodium.gitbook.io/doc/advanced/ed25519-curve25519">Ed25519
+      to Curve25519</a></li>
+</ul>
+<p class="Pp"><a class="Lk" href="https://age-encryption.org/v1">age-encryption
+    format specification</a></p>
+</section>
+<section class="Sh">
+<h1 class="Sh" id="STANDARDS"><a class="permalink" href="#STANDARDS">STANDARDS</a></h1>
+<p class="Pp"><cite class="Rs"><span class="RsT">The Secure Shell (SSH) Protocol
+    Assigned Numbers</span>, <span class="RsR">RFC 4250</span>,
+    <a class="RsU" href="https://www.rfc-editor.org/rfc/rfc4250">https://www.rfc-editor.org/rfc/rfc4250</a>.</cite></p>
+<p class="Pp"><cite class="Rs"><span class="RsT">The Secure Shell (SSH) Protocol
+    Architecture</span>, <span class="RsR">RFC 4251</span>,
+    <a class="RsU" href="https://www.rfc-editor.org/rfc/rfc4251">https://www.rfc-editor.org/rfc/rfc4251</a>.</cite></p>
+<p class="Pp"><cite class="Rs"><span class="RsT">The Secure Shell (SSH)
+    Transport Layer Protocol</span>, <span class="RsR">RFC 4253</span>,
+    <a class="RsU" href="https://www.rfc-editor.org/rfc/rfc4253">https://www.rfc-editor.org/rfc/rfc4253</a>.</cite></p>
+<p class="Pp"><cite class="Rs"><span class="RsT">Textual Encodings of PKIX,
+    PKCS, and CMS Structures</span>, <span class="RsR">RFC 7468</span>,
+    <a class="RsU" href="https://www.rfc-editor.org/rfc/rfc7468">https://www.rfc-editor.org/rfc/rfc7468</a>.</cite></p>
+<p class="Pp"><cite class="Rs"><span class="RsT">PKCS #1: RSA Cryptography
+    Specifications Version 2.2</span>, <span class="RsR">RFC 8017</span>,
+    <a class="RsU" href="https://www.rfc-editor.org/rfc/rfc8017">https://www.rfc-editor.org/rfc/rfc8017</a>.</cite></p>
+<p class="Pp"><cite class="Rs"><span class="RsT">Ed25519 and Ed448 Public Key
+    Algorithms for the Secure Shell (SSH) Protocol</span>, <span class="RsR">RFC
+    8709</span>,
+    <a class="RsU" href="https://www.rfc-editor.org/rfc/rfc4251">https://www.rfc-editor.org/rfc/rfc4251</a>.</cite></p>
+</section>
+<section class="Sh">
+<h1 class="Sh" id="CAVEATS"><a class="permalink" href="#CAVEATS">CAVEATS</a></h1>
+<p class="Pp">This specification is written in terms of several
+    <b class="Sy">libsodium</b> functions. The aim is to use the best available
+    misuse-resistant high-level cryptographic functions, and avoid being too
+    clever. It would be better to have a description of what these functions do,
+    in enough detail that an expert would be able to write an alternative
+    implementation. However the <b class="Sy">libsodium</b> documentation and
+    source code do not cite any specifications.</p>
+</section>
+<section class="Sh">
+<h1 class="Sh" id="AUTHORS"><a class="permalink" href="#AUTHORS">AUTHORS</a></h1>
+<p class="Pp"><span class="An">Tony Finch</span>
+  &#x27E8;dot@dotat.at&#x27E9;</p>
+</section>
+</div>
+<table class="foot">
+  <tr>
+    <td class="foot-date">November 14, 2021</td>
+    <td class="foot-os">SSH-BOX Pq 5</td>
+  </tr>
+</table>
+<footer>
+  <address>
+    <a href="https://dotat.at/prog/ssh-box/"><tt>ssh-box</tt></a>
+    was written by
+    <a href="https://dotat.at/">Tony Finch</a>
+    &lt;<a href="mailto:dot@dotat.at">dot@dotat.at</a>&gt;
+  </address>
+</footer>
+</body>
+</html>

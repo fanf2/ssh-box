@@ -5,5 +5,5 @@ it:
 	cargo clippy
 	cargo doc --no-deps
 	cargo test
-	cargo run --bin ssh-box-html
+	cargo run --bin dochtml
 	cargo run </dev/null
